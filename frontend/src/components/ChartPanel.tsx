@@ -1144,10 +1144,12 @@ export default function ChartPanel(props: ChartPanelProps) {
         primitive.setData(result, barsRef.current, interval <= 2);
         mainSeriesRef.current.attachPrimitive(primitive);
         ichimokuPrimRef.current = primitive;
-        fitTimeScaleDefault();
+        // 2026-08-05：刷新路径 preserveScale=true 时跳过 — 不重置时间轴缩放
+        if (!preserveScale) fitTimeScaleDefault();
       }
     } catch (e) {
       console.error('加载叠加指标失败', e);
+      message.error(t('LoadFailed'));
     }
   };
 
@@ -1689,6 +1691,42 @@ export default function ChartPanel(props: ChartPanelProps) {
     }
   };
 
+  // ---- 2026-08-05：手动刷新 / WS 重连后的全量重拉 (就地更新) ----
+  // 与 [code, interval] 全量重建 effect 的区别：
+  //  - 不重建 series / pane — 主图 setData、副图 resetLowerPane 就地更新, 无闪烁、缩放不跳
+  //  - 不清除绘图对象、不重置绘图工具 (切换品种才会清)
+  //  - 每个 await 后校验 code/interval 仍是当前选择, 防止与切换品种的全量重建交错污染
+  const refreshAllData = async (): Promise<void> => {
+    const chart = chartRef.current;
+    const series = mainSeriesRef.current;
+    if (!chart || !series) return;
+    const code = props.code;
+    const interval = props.interval;
+    const stillCurrent = () =>
+      liveSelectionRef.current.code === code && liveSelectionRef.current.interval === interval;
+    try {
+      const bars = await marketApi.getBars(code, interval, 300, false);
+      if (!stillCurrent()) return;
+      barsRef.current = bars;
+      // 主图就地更新 (不重建 series — 保持时间轴缩放与绘图 primitive 引用)
+      series.setData(buildMainSeriesData(bars, props.chartType));
+      if (volumeSeriesRef.current) {
+        volumeSeriesRef.current.setData(buildVolumeData(bars, props.palette));
+      }
+      prosticksPrimRef.current?.setData(bars);
+      // 叠加指标: 主 pane 内重建 series (无 pane 结构变化), IKH 保留时间轴缩放
+      await loadOverlayIndicator(props.upper, code, interval, props.upperParams, true);
+      if (!stillCurrent()) return;
+      // 副图指标: 逐 pane 就地重算 (resetLowerPane 内部 setData + 更新缓存/浮层值)
+      await Promise.all(props.lower.map((tech) => resetLowerPane(tech, code, interval)));
+    } catch (e) {
+      console.error('刷新数据失败', e);
+      message.error(t('LoadFailed'));
+    }
+  };
+  // 镜像最新实例 — 挂载期 WS 重连回调与工具栏/顶栏刷新按钮都经由 ref 调用
+  refreshAllRef.current = refreshAllData;
+
   // ---- 2026-08-05：横屏全屏真正隐藏副图 ----
   // 库对 pane 高度有硬性下限 (Math.max(计算值, 2)), setStretchFactor(0) 只能压成 2px 细缝,
   // CSS 也无法归零 — 唯一路径是移除 series → 空 pane 自动删除, 主图占满 100%。
@@ -1835,6 +1873,26 @@ export default function ChartPanel(props: ChartPanelProps) {
   };
   // 2026-08-05：每次渲染镜像最新函数 — 挂载期订阅经由 ref 调用, 确保读到最新 props
   updateInfoOverlayRef.current = updateInfoOverlay;
+
+  // 2026-08-05：3 秒自动隐藏定时器 — 触屏松开/离开后自动隐藏库原生光标线 + info 浮层
+  // 调库 chart.clearCrosshairPosition() 同时隐藏 vertLine/horzLine, 库内部会派发
+  // subscribeCrosshairMove 回调 → updateInfoOverlay 设 setInfo('') 清空浮层
+  const cancelHide = () => {
+    if (hideTimerRef.current !== null) {
+      window.clearTimeout(hideTimerRef.current);
+      hideTimerRef.current = null;
+    }
+  };
+  const scheduleHide = () => {
+    cancelHide();
+    hideTimerRef.current = window.setTimeout(() => {
+      chartRef.current?.clearCrosshairPosition();
+      setInfo('');
+      hideTimerRef.current = null;
+    }, 1300);
+  };
+  // 卸载清理
+  useEffect(() => () => { cancelHide(); }, []);
 
   /** 从鼠标事件参数中提取实际价格 (基于鼠标 Y 坐标, 而非 bar 收盘价)。 */
   const getMousePrice = (param: MouseEventParams<Time>): number | null => {
@@ -2020,12 +2078,46 @@ export default function ChartPanel(props: ChartPanelProps) {
     return { time, price };
   };
 
-  // 工具激活时, 触摸按下/移动驱动绘图预览 (轻点落点仍由库的 subscribeClick 完成)
-  const onChartPointerMoveForDraw = (e: ReactPointerEvent<HTMLDivElement>) => {
-    if (props.tool === TOOL.NONE) return;
+  // 2026-08-05：触屏路径统一处理 — 自绘十字光标线 + info 浮层 + 绘图预览
+  // 鼠标路径仍走库的 subscribeCrosshairMove (这里直接 return, 桌面零变化)
+  // 触屏路径：调库 setCrosshairPosition 显示库原生 vertLine/horzLine, 自动触发 subscribeCrosshairMove → info 浮层
+  const onChartPointerMove = (e: ReactPointerEvent<HTMLDivElement>) => {
     if (e.pointerType === 'mouse') return;
+    const chart = chartRef.current;
+    const series = mainSeriesRef.current;
+    if (!chart || !series) return;
+    const el = containerRef.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    const localY = e.clientY - rect.top;
+    cancelHide();
     const tp = clientToTimePrice(e.clientX, e.clientY);
-    if (tp) drawingMgrRef.current?.handleMouseMove(tp.time, tp.price);
+    const mainRect = paneRects[0];
+    // 仅在主图 pane 范围内显示 (paneIndex === 0)
+    const inMainPane = mainRect && localY >= mainRect.top && localY <= mainRect.top + mainRect.height;
+    if (tp && inMainPane) {
+      // 库原生：调 setCrosshairPosition 显示 vertLine/horzLine + 触发 subscribeCrosshairMove 回调 → info 浮层
+      chart.setCrosshairPosition(tp.price, tp.time, series);
+    } else {
+      chart.clearCrosshairPosition();
+      setInfo('');
+    }
+    // 工具激活时驱动绘图预览 (轻点落点仍由库的 subscribeClick 完成)
+    if (tp && props.tool !== TOOL.NONE) {
+      drawingMgrRef.current?.handleMouseMove(tp.time, tp.price);
+    }
+  };
+
+  // 2026-08-05：手指离开 chart → 3 秒后自动隐藏库光标线 + info
+  const onChartPointerLeave = () => {
+    scheduleHide();
+  };
+
+  // 2026-08-05：触屏事件被系统打断 (电话/弹窗) → 立即隐藏, 不留尾
+  const onChartPointerCancel = () => {
+    chartRef.current?.clearCrosshairPosition();
+    setInfo('');
+    cancelHide();
   };
 
   // ---- 2026-08-04：点击副图循环切换指标 (需求: 正常状态下点副图按顺序切换) ----
@@ -2035,7 +2127,7 @@ export default function ChartPanel(props: ChartPanelProps) {
   const LOWER_TAP_THRESHOLD = 8;
 
   const onChartPointerDown = (e: ReactPointerEvent<HTMLDivElement>) => {
-    onChartPointerMoveForDraw(e);
+    onChartPointerMove(e);
     lowerTapStartRef.current = { x: e.clientX, y: e.clientY, pointerId: e.pointerId };
   };
 
@@ -2071,14 +2163,25 @@ export default function ChartPanel(props: ChartPanelProps) {
     props.onCycleLower();
   };
 
+  // 2026-08-05：onPointerUp 末尾追加 — 触屏松开后启动 3 秒自动隐藏
+  // (PC 鼠标不触发此定时器, 库原生光标线鼠标移出 chart 自动消失)
+  const onChartPointerUpWithHide = (e: ReactPointerEvent<HTMLDivElement>) => {
+    onChartPointerUp(e);
+    if (e.pointerType !== 'mouse') {
+      scheduleHide();
+    }
+  };
+
   return (
     <div
       className="chart-container"
       ref={containerRef}
       style={chartStyle}
       onPointerDown={onChartPointerDown}
-      onPointerMove={onChartPointerMoveForDraw}
-      onPointerUp={onChartPointerUp}
+      onPointerMove={onChartPointerMove}
+      onPointerUp={onChartPointerUpWithHide}
+      onPointerLeave={onChartPointerLeave}
+      onPointerCancel={onChartPointerCancel}
       aria-label="Forex chart"
       onClick={() => {
         // 2026-07-27：图表空白处点击 → 取消选中文字框
@@ -2088,6 +2191,7 @@ export default function ChartPanel(props: ChartPanelProps) {
       }}
     >
       {info && <div className="info-overlay" dangerouslySetInnerHTML={{ __html: info}} />}
+      {/* 触屏路径：库原生 vertLine/horzLine + info 浮层 (scheduleHide 3 秒后调 clearCrosshairPosition 隐藏) */}
       <div className={`tools-hint ${toolHint ? 'show' : ''}`}>{toolHint}</div>
       {/* 2026-07-29：副图标题浮层 — 移动端由 CSS @media 隐藏 */}
       {props.lower.map((tech, idx) => {
