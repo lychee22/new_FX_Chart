@@ -832,15 +832,7 @@ export default function ChartPanel(props: ChartPanelProps) {
         lineWidth: 1,
         priceFormat,
       });
-      const data = bars
-        .filter((b) => b.h > 0)
-        .map((b) => ({
-          time: b.time as Time,
-          value: chartType === TYPE.MODAL_LINE ? b.mp : b.c,
-        }))
-        // 模态线跳过 mp=0 的点
-        .filter((d) => chartType !== TYPE.MODAL_LINE || (d.value as number) > 0);
-      series.setData(data);
+      series.setData(buildMainSeriesData(bars, chartType));
     } else if (chartType === TYPE.AREA) {
       series = chart.addSeries(AreaSeries, {
         lineColor: '#1E90FF',
@@ -849,7 +841,7 @@ export default function ChartPanel(props: ChartPanelProps) {
         lineWidth: 1,
         priceFormat,
       });
-      series.setData(bars.filter((b) => b.h > 0).map((b) => ({ time: b.time as Time, value: b.c })));
+      series.setData(buildMainSeriesData(bars, chartType));
     } else if (chartType === TYPE.BAR || chartType === TYPE.BAR_MODAL) {
       series = chart.addSeries(BarSeries, {
         upColor: props.palette.bar.upColor,
@@ -857,11 +849,7 @@ export default function ChartPanel(props: ChartPanelProps) {
         thinBars: false,
         priceFormat,
       });
-      series.setData(
-        bars.filter((b) => b.h > 0).map((b) => ({
-          time: b.time as Time, open: b.o, high: b.h, low: b.l, close: b.c,
-        })),
-      );
+      series.setData(buildMainSeriesData(bars, chartType));
     } else {
       // CANDLE (默认) + PROSTICKS 都用 candlestick 作为底
       series = chart.addSeries(CandlestickSeries, {
@@ -873,11 +861,7 @@ export default function ChartPanel(props: ChartPanelProps) {
         wickDownColor: props.palette.candle.wickDownColor,
         priceFormat,
       });
-      series.setData(
-        bars.filter((b) => b.h > 0).map((b) => ({
-          time: b.time as Time, open: b.o, high: b.h, low: b.l, close: b.c,
-        })),
-      );
+      series.setData(buildMainSeriesData(bars, chartType));
     }
     mainSeriesRef.current = series;
 
@@ -926,14 +910,7 @@ export default function ChartPanel(props: ChartPanelProps) {
           },
           0,
         );
-        const validBars = bars.filter((b) => b.h > 0);
-        volSeries.setData(
-          validBars.map((b) => ({
-            time: b.time as Time,
-            value: b.v,
-            color: b.c >= b.o ? props.palette.bar.upColor : props.palette.bar.downColor,
-          })),
-        );
+        volSeries.setData(buildVolumeData(bars, props.palette));
         // 把成交量压到主图底部 15%，并隐藏独立 price scale 的刻度文字
         chart.priceScale(volumeScaleId).applyOptions({
           scaleMargins: { top: 0.85, bottom: 0 },
@@ -992,9 +969,27 @@ export default function ChartPanel(props: ChartPanelProps) {
     seriesList: ISeriesApi<any>[], result: IndicatorResult, indicatorType?: number, tech?: number,
   ): void => {
     result.series.forEach((item, index) => {
-      const point = item.data[0];
       const series = seriesList[index];
-      if (!series || !point || point.value === null) return;
+      if (!series || item.data.length === 0) return;
+      // 2026-08-05：重订阅/重连后后端重推全量 INDICATORS — 快照就地整体替换。
+      // 旧逻辑只取 data[0] 做 update, 会把指标线从历史首点"拉回起点"重绘。
+      if (item.data.length > 1) {
+        const { points } = sanitizePoints(item.data);
+        if (indicatorType === LOWER_TECH.MACD && index === 2) {
+          series.setData(
+            points.map((d) => ({
+              time: d.time as Time,
+              value: d.value,
+              color: d.value >= 0 ? props.palette.overlay.up : props.palette.overlay.down,
+            })),
+          );
+        } else {
+          series.setData(points.map((d) => ({ time: d.time as Time, value: d.value })));
+        }
+        return;
+      }
+      const point = item.data[0];
+      if (!point || point.value === null) return;
       const update: any = { time: point.time as Time, value: point.value };
       if (indicatorType === LOWER_TECH.MACD && index === 2) {
         update.color = point.value >= 0 ? props.palette.overlay.up : props.palette.overlay.down;
