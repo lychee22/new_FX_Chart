@@ -1,0 +1,947 @@
+/* ===== 全局 ===== */
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: 'Segoe UI', 'Microsoft YaHei', 'PingFang SC', Arial, sans-serif;
+  font-size: 13px;
+  color: #202020;
+  background: #ffffff;
+}
+
+.app {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  overflow: hidden;
+}
+
+/* ===== 工具栏 ===== */
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  background: linear-gradient(to bottom, #fafbfc, #eef1f4);
+  border-bottom: 1px solid #d4d9de;
+  flex-wrap: wrap;
+}
+
+/* 统一控件外观: 下拉框 / 按钮 / 触发器 高度一致 */
+.toolbar select,
+.toolbar .icon-btn,
+.toolbar .lang-btn,
+.ms-trigger {
+  height: 28px;
+  font-size: 13px;
+  color: #2c3e50;
+  background: #fff;
+  border: 1px solid #c5ccd3;
+  border-radius: 4px;
+  outline: none;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.toolbar select {
+  padding: 0 8px;
+  cursor: pointer;
+}
+.toolbar select:hover,
+.toolbar .icon-btn:hover,
+.toolbar .lang-btn:hover,
+.ms-trigger:hover {
+  border-color: #4a90d9;
+}
+
+/* 聚焦高亮 (统一蓝色边框 + 淡蓝光晕) */
+.toolbar select:focus,
+.ms-trigger:focus-visible {
+  border-color: #4a90d9;
+  box-shadow: 0 0 0 2px rgba(74, 144, 217, 0.2);
+}
+
+/* 图标按钮 */
+.toolbar .icon-btn {
+  width: 30px;
+  padding: 0;
+  font-size: 15px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  line-height: 1;
+}
+.icon-btn:hover { background: #eaf2fb; }
+.icon-btn:active { background: #d6e6f7; }
+/* 2026-07-31：清除所有按钮在无对象时 disabled，需要明确的视觉反馈 */
+.icon-btn:disabled,
+.icon-btn[disabled] {
+  cursor: not-allowed;
+  opacity: 0.4;
+  background: transparent;
+}
+.icon-btn:disabled:hover,
+.icon-btn[disabled]:hover {
+  background: transparent;
+}
+
+/* 语言切换 */
+.toolbar .lang-group {
+  margin-left: auto;
+  display: flex;
+  gap: 3px;
+}
+.toolbar .lang-btn {
+  min-width: 34px;
+  padding: 0 6px;
+  cursor: pointer;
+  font-size: 12px;
+}
+.toolbar .lang-btn.active {
+  background: #2c5282;
+  color: #fff;
+  border-color: #2c5282;
+}
+
+/* ===== 多选勾选下拉 (副图指标) — 精致版 ===== */
+.multi-select {
+  position: relative;
+}
+.ms-trigger {
+  padding: 0 10px;
+  cursor: pointer;
+  white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.ms-trigger .ms-caret {
+  color: #8895a6;
+  font-size: 10px;
+  margin-left: 2px;
+}
+.ms-trigger.ms-has-selected {
+  border-color: #4a90d9;
+  background: #eaf2fb;
+  font-weight: 600;
+  color: #2c5282;
+}
+
+.ms-menu {
+  position: absolute;
+  top: 32px;
+  left: 0;
+  z-index: 60;
+  min-width: 180px;
+  background: #fff;
+  border: 1px solid #c5ccd3;
+  border-radius: 6px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.16), 0 2px 4px rgba(0, 0, 0, 0.08);
+  padding: 4px 0;
+  max-height: 320px;
+  overflow-y: auto;
+  /* 滚动条美化 */
+  scrollbar-width: thin;
+  scrollbar-color: #c5ccd3 transparent;
+}
+.ms-menu::-webkit-scrollbar { width: 7px; }
+.ms-menu::-webkit-scrollbar-thumb {
+  background: #c5ccd3;
+  border-radius: 4px;
+}
+.ms-menu::-webkit-scrollbar-track { background: transparent; }
+
+/* 下拉项 */
+.ms-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  font-size: 13px;
+  cursor: pointer;
+  white-space: nowrap;
+  color: #2c3e50;
+  transition: background 0.1s;
+}
+.ms-option:hover {
+  background: #eef4fb;
+}
+.ms-option.ms-checked {
+  background: #f0f7ff;
+  color: #2c5282;
+  font-weight: 500;
+}
+
+/* 自定义复选框方块 (替代原生丑陋的 checkbox) */
+.ms-option .ms-box {
+  width: 15px;
+  height: 15px;
+  border: 1.5px solid #b4bcc6;
+  border-radius: 3px;
+  background: #fff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition: all 0.12s;
+}
+.ms-option.ms-checked .ms-box {
+  background: #4a90d9;
+  border-color: #4a90d9;
+}
+.ms-option.ms-checked .ms-box::after {
+  content: '';
+  width: 4px;
+  height: 8px;
+  border: solid #fff;
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg) translate(-1px, -1px);
+}
+.ms-option input {
+  /* 隐藏原生 checkbox, 用 .ms-box 显示 */
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+/* 下拉菜单底部"清除全部"按钮 */
+.ms-footer {
+  display: flex;
+  justify-content: flex-end;
+  padding: 6px 12px;
+  border-top: 1px solid #eaedf0;
+  margin-top: 2px;
+}
+.ms-footer button {
+  font-size: 12px;
+  color: #8895a6;
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 3px;
+}
+.ms-footer button:hover {
+  color: #d00000;
+  background: #fdeaea;
+}
+
+/* ===== 标题栏 ===== */
+.title-bar {
+  padding: 5px 10px;
+  background: #2c538200;
+  color: #090909;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  /* position: absolute; */
+}
+
+/* ===== 图表区域 ===== */
+.chart-container {
+  flex: 1;
+  position: relative;
+  overflow: hidden;
+  background: #fff;
+}
+
+/* 信息浮层 - OHLC/模态点读数 */
+.info-overlay {
+  position: absolute;
+  top: 6px;
+  left: 8px;
+  z-index: 10;
+  background: rgba(255, 255, 255, 0.94);
+  border: 1px solid #d4d9de;
+  border-radius: 4px;
+  padding: 5px 9px;
+  font-size: 11px;
+  line-height: 1.7;
+  pointer-events: none;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+}
+/* 2026-07-24：涨跌色由 React 通过 CSS 变量 --io-up / --io-down 注入 (按后端 nation 切换) */
+.info-overlay .up { color: var(--io-up, #000000); }
+.info-overlay .down { color: var(--io-down, #000000); }
+.info-overlay .mp { color: #ff0000; font-weight: bold; }
+
+/* 工具提示 */
+.tools-hint {
+  position: absolute;
+  top: 6px;
+  right: 8px;
+  z-index: 10;
+  background: #fffbe6;
+  border: 1px solid #ffe58f;
+  border-radius: 4px;
+  padding: 3px 8px;
+  font-size: 11px;
+  color: #8a6d00;
+  display: none;
+}
+.tools-hint.show { display: block; }
+
+/* 2026-07-29：副图标题浮层 (左上角) — 显示指标名 + 当前值 + 4 个操作按钮 */
+.pane-title-overlay {
+  position: absolute;
+  left: 8px;
+  z-index: 11;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 6px;
+  background: rgba(255, 255, 255, 0.92);
+  border: 1px solid #c0c0c0;
+  border-radius: 4px;
+  font-size: 11px;
+  line-height: 1.4;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
+  pointer-events: auto;
+  white-space: nowrap;
+  max-width: calc(100% - 16px);
+}
+.pane-title-overlay .pane-title-name {
+  font-weight: 600;
+  color: #2c3e50;
+}
+.pane-title-overlay .pane-title-value {
+  color: #4a90d9;
+  font-weight: 500;
+  font-family: 'Consolas', 'Menlo', monospace;
+}
+.pane-title-overlay .pane-title-actions {
+  display: flex;
+  gap: 2px;
+  margin-left: 2px;
+  padding-left: 6px;
+  border-left: 1px solid #e0e0e0;
+}
+.pane-title-overlay .pane-title-actions button {
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  background: transparent;
+  color: #5a6675;
+  font-size: 12px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.12s;
+}
+.pane-title-overlay .pane-title-actions button:hover {
+  background: #eef4fb;
+  border-color: #4a90d9;
+  color: #2c5282;
+}
+.pane-title-overlay .pane-title-actions button:active {
+  background: #d6e6f7;
+}
+.pane-title-overlay .pane-title-actions button:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+.pane-title-overlay .pane-title-actions button:disabled:hover {
+  background: transparent;
+  border-color: transparent;
+  color: #5a6675;
+}
+
+/* 2026-08-04：移动端副图描述条 (需求2) — 位于主图与副图交界处 (副图 pane 顶部),
+   仿股票"成交量 XXX手": 满宽条状浅色背景, 桌面端操作按钮隐藏。
+   JS 注入 style.top = 副图 pane 顶部像素 (贴齐主/副图分隔线)。 */
+.pane-title-overlay.pane-title-mobile {
+  left: 0;
+  width: auto;
+  max-width: none;
+  height: 22px;
+  padding: 0 8px;
+  border: none;
+  border-bottom: 1px solid #e2e8f0;
+  border-radius: 0;
+  background: #f2f5f9;
+  box-shadow: none;
+}
+.pane-title-overlay.pane-title-mobile .pane-title-actions {
+  display: none;
+}
+
+.loading {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  color: #8895a6;
+  font-size: 14px;
+}
+
+/* 2026-07-21 18:28:13：为 iframe 内的 iOS/Android 竖屏提供独立滚动、触摸尺寸和安全区域适配。 */
+@media (pointer: coarse) {
+  html,
+  body,
+  #root {
+    width: 100%;
+    min-height: 100%;
+    height: auto;
+  }
+
+  html {
+    -webkit-text-size-adjust: 100%;
+    text-size-adjust: 100%;
+  }
+
+  body {
+    overflow-x: hidden;
+    overflow-y: auto;
+    overscroll-behavior-y: contain;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .app {
+    width: 100%;
+    height: auto;
+    min-height: 100vh;
+    min-height: 100dvh;
+    overflow: visible;
+  }
+
+  .toolbar {
+    position: relative;
+    z-index: 70;
+    flex: 0 0 auto;
+    flex-wrap: nowrap;
+    align-items: center;
+    gap: 8px;
+    padding: max(6px, env(safe-area-inset-top)) max(8px, env(safe-area-inset-right)) 6px max(8px, env(safe-area-inset-left));
+    overflow-x: auto;
+    overflow-y: hidden;
+    overscroll-behavior-x: contain;
+    -webkit-overflow-scrolling: touch;
+    touch-action: pan-x pan-y;
+    scrollbar-width: thin;
+    scrollbar-color: #aeb8c2 transparent;
+  }
+
+  .toolbar::-webkit-scrollbar {
+    height: 4px;
+  }
+
+  .toolbar::-webkit-scrollbar-thumb {
+    background: #aeb8c2;
+    border-radius: 4px;
+  }
+
+  .toolbar > * {
+    flex: 0 0 auto;
+  }
+
+  .toolbar select,
+  .toolbar .icon-btn,
+  .toolbar .lang-btn,
+  .ms-trigger {
+    height: 44px;
+    font-size: 16px;
+    touch-action: manipulation;
+  }
+
+  .toolbar select {
+    max-width: 168px;
+    padding: 0 10px;
+  }
+
+  .toolbar .icon-btn {
+    width: 44px;
+    font-size: 18px;
+  }
+
+  .toolbar .lang-group {
+    margin-left: 0;
+    gap: 6px;
+  }
+
+  .toolbar .lang-btn {
+    min-width: 44px;
+    padding: 0 8px;
+    font-size: 14px;
+  }
+
+  .ms-trigger {
+    padding: 0 12px;
+  }
+
+  .ms-menu {
+    position: fixed;
+    top: calc(max(6px, env(safe-area-inset-top)) + 52px);
+    left: max(8px, env(safe-area-inset-left));
+    right: max(8px, env(safe-area-inset-right));
+    z-index: 90;
+    min-width: 0;
+    max-height: min(70dvh, 480px);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+
+  .ms-option {
+    min-height: 44px;
+    padding: 8px 14px;
+    font-size: 16px;
+  }
+
+  .ms-option .ms-box {
+    width: 20px;
+    height: 20px;
+  }
+
+  .ms-footer button {
+    min-height: 44px;
+    padding: 0 10px;
+    font-size: 14px;
+  }
+
+  .title-bar {
+    flex: 0 0 auto;
+    padding: 7px max(10px, env(safe-area-inset-right)) 7px max(10px, env(safe-area-inset-left));
+  }
+
+  /* 2026-08-04：移动端图表高度 = 容器剩余高度 (flex 撑满), 不再固定 62vh+副图高度,
+     消除 y 轴滚动条。副图 pane 高度由 lightweight-charts 按 stretchFactor 内部分配。 */
+  .chart-container {
+    flex: 1 1 auto;
+    width: 100%;
+    min-width: 0;
+    min-height: 0;
+    height: 100%;
+    touch-action: pan-y;
+  }
+
+  .info-overlay {
+    top: 5px;
+    left: max(6px, env(safe-area-inset-left));
+    max-width: calc(100% - 12px - env(safe-area-inset-left) - env(safe-area-inset-right));
+    padding: 4px 6px;
+    font-size: 10px;
+    line-height: 1.55;
+  }
+
+  .tools-hint {
+    top: 5px;
+    right: max(6px, env(safe-area-inset-right));
+    max-width: calc(100% - 12px);
+  }
+
+  /* 2026-07-29 → 2026-08-04：移动端副图标题浮层不再隐藏,
+     改为条状描述条样式 (需求2, "成交量 XXX手"), 由 .pane-title-mobile 类驱动 (见基础样式区) */
+}
+
+/* ===== antd 移动端组件样式 (MobileLayout) ===== */
+/* 2026-07-24：移动端引入 antd v5, 2026-08-04 起仅在指针设备(触摸屏)范围内生效, 不影响 PC 端 */
+
+@media (pointer: coarse) {
+  .mobile-shell {
+    display: flex;
+    flex-direction: column;
+    /* 2026-08-04：固定为视口高度 (min-height 改 height) — flex 子项需要容器确定高度才能撑满,
+       图表区高度 = 100dvh - 顶部各栏, 不再产生纵向滚动。 */
+    height: 100vh;
+    height: 100dvh;
+    padding-top: env(safe-area-inset-top);
+    padding-bottom: env(safe-area-inset-bottom);
+    padding-left: env(safe-area-inset-left);
+    padding-right: env(safe-area-inset-right);
+    background: #fff;
+  }
+
+  /* PC 端组件在移动端隐藏 (避免双重渲染) */
+  .mobile-shell ~ .toolbar,
+  .mobile-shell ~ .title-bar {
+    display: none;
+  }
+
+  /* 顶部导航 (44px 高) */
+  .mobile-topbar {
+    height: 44px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 0 4px;
+    border-bottom: 1px solid #e5e7eb;
+    background: #fff;
+    flex-shrink: 0;
+  }
+  /* 2026-08-04：标题区域可点击切换品种 (需求3) — button 语义化重置 + 下拉箭头提示 */
+  .mobile-topbar-title {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    line-height: 1.15;
+    position: relative;
+    border: none;
+    background: none;
+    padding: 4px 0;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+    touch-action: manipulation;
+  }
+  .mobile-topbar-title:active {
+    opacity: 0.6;
+  }
+  .mobile-topbar-title-caret {
+    position: absolute;
+    right: calc(50% - 46px);
+    top: 50%;
+    transform: translateY(-50%);
+    font-size: 10px;
+    color: #9ca3af;
+    pointer-events: none;
+  }
+  .mobile-topbar-main {
+    font-size: 15px;
+    font-weight: 600;
+    color: #202020;
+  }
+  .mobile-topbar-sub {
+    font-size: 11px;
+    color: #6b7280;
+  }
+  .mobile-topbar-actions {
+    display: flex;
+    gap: 2px;
+  }
+
+  /* 详情页 Tab */
+  .mobile-tabs {
+    flex-shrink: 0;
+    background: #fff;
+  }
+  .mobile-tabs .ant-tabs-nav {
+    margin: 0 16px;
+  }
+  .mobile-tab-empty {
+    padding: 24px;
+    text-align: center;
+    color: #9ca3af;
+    font-size: 13px;
+  }
+
+  /* 移动端工具栏 (周期 / 类型 / 齿轮) */
+  .mobile-toolbar {
+    display: flex;
+    gap: 8px;
+    padding: 8px 12px;
+    border-bottom: 1px solid #f0f0f0;
+    background: #fff;
+    flex-shrink: 0;
+  }
+  .mobile-toolbar > button {
+    flex: 1;
+    height: 36px;
+    font-size: 13px;
+  }
+  .mobile-toolbar > .ant-btn-icon-only {
+    flex: 0 0 36px;
+  }
+
+  /* 图表区: 与 PC 共用 ChartPanel */
+  .mobile-chart-wrap {
+    position: relative;
+    flex: 1;
+    min-height: 0;
+  }
+  /* 图表区全屏 (requestFullscreen): 仅图表占满屏幕, TopBar/Tabs/工具栏/免责声明已条件隐藏 */
+  .mobile-shell.is-chart-fullscreen {
+    padding: 0;
+    background: #fff;
+  }
+  .mobile-shell.is-chart-fullscreen .mobile-chart-wrap {
+    height: 100vh;
+    height: 100dvh;
+  }
+  /* 2026-08-03：横屏全屏时图表容器铺满 wrap — 竖屏基础规则已是 height:100% (2026-08-04),
+     这里不再重复声明。 */
+  .mobile-shell.is-chart-fullscreen .mobile-tabs,
+  .mobile-shell.is-chart-fullscreen .ant-tabs {
+    display: none;
+  }
+
+  /* 2026-08-03：横屏全屏时隐藏副图标题/骨架浮层。
+     原隐藏规则写在 @media (max-width:768px) 内, 横屏宽度超 768px 时浮层会重新出现盖在图表上;
+     这里改为以全屏类为触发条件, 覆盖竖屏全屏 + 横屏全屏两种场景。
+     2026-08-04：全屏只显示主图, 副图描述条(.pane-title-mobile)一并隐藏。 */
+  .mobile-shell.is-chart-fullscreen .pane-title-overlay,
+  .mobile-shell.is-chart-fullscreen .pane-skeleton-overlay {
+    display: none;
+  }
+
+  /* 2026-08-03：横屏观看模式 — 浮动退出按钮 (absolute 定位于图表区右上角) */
+  .mobile-shell.is-chart-fullscreen .mobile-landscape-exit {
+    position: absolute;
+    top: calc(env(safe-area-inset-top) + 10px);
+    right: calc(env(safe-area-inset-right) + 10px);
+    z-index: 30;                 /* 高于图表浮层 (10/11) */
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 38px;
+    height: 38px;
+    border: 1px solid #d4d9de;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.94);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.14);
+    color: #202020;
+    font-size: 18px;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+    touch-action: manipulation;
+  }
+  .mobile-shell.is-chart-fullscreen .mobile-landscape-exit:active {
+    background: #f0f0f0;
+  }
+
+  /* 2026-08-03：横屏观看模式 — 紧凑工具栏 (工具 / 周期 / 设置)。
+     与竖屏 mobile-toolbar 同风格, 位于图表区顶部, 退出按钮在其右侧留位不重叠。 */
+  .mobile-shell.is-chart-fullscreen .mobile-landscape-tools {
+    display: flex;
+    gap: 6px;
+    position: absolute;
+    top: calc(env(safe-area-inset-top) + 8px);
+    left: calc(env(safe-area-inset-left) + 8px);
+    right: calc(env(safe-area-inset-right) + 56px); /* 给退出按钮留位 */
+    z-index: 28;
+    justify-content: flex-start;
+  }
+  .mobile-shell.is-chart-fullscreen .mobile-landscape-tools > .ant-btn {
+    flex: 0 1 auto;
+    height: 34px;
+    font-size: 13px;
+    padding: 0 12px;
+    border-radius: 6px;
+    background: rgba(255, 255, 255, 0.94);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  }
+  .mobile-shell.is-chart-fullscreen .mobile-landscape-tools > .ant-btn-icon-only {
+    flex: 0 0 34px;
+  }
+
+  /* 全屏时工具提示右移, 避免与退出按钮重叠 (tools-hint 平时在右上角) */
+  .mobile-shell.is-chart-fullscreen .tools-hint {
+    right: calc(env(safe-area-inset-right) + 48px);
+  }
+
+  /* 免责声明 */
+  .mobile-disclaimer {
+    padding: 8px 16px;
+    font-size: 11px;
+    color: #6b7280;
+    background: #fafafa;
+    text-align: center;
+    border-top: 1px solid #f0f0f0;
+    flex-shrink: 0;
+  }
+
+  /* DEPRECATED 2026-07-24：暂时不显示买入卖出条；保留样式以备以后启用 */
+  .mobile-trade-bar {
+    display: flex;
+    gap: 1px;
+    background: #e5e7eb;
+    flex-shrink: 0;
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+  .mobile-trade-btn {
+    flex: 1;
+    height: 56px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 2px;
+    border: none;
+    border-radius: 0;
+    font-weight: 600;
+    cursor: pointer;
+    color: #fff;
+  }
+  .mobile-trade-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+  .mobile-trade-sell {
+    background: #dc2626;
+  }
+  .mobile-trade-sell:not(:disabled):active {
+    background: #b91c1c;
+  }
+  .mobile-trade-buy {
+    background: #16a34a;
+  }
+  .mobile-trade-buy:not(:disabled):active {
+    background: #15803d;
+  }
+  .mobile-trade-label {
+    font-size: 14px;
+  }
+  .mobile-trade-code {
+    font-size: 11px;
+    opacity: 0.85;
+  }
+  .mobile-trade-price {
+    font-size: 13px;
+    font-weight: 500;
+  }
+
+  /* 2026-07-24：底部弹出 Sheet (替换原生 <select>) —— 半屏固定 55vh, 顶部圆角, 无关闭按钮 (点遮罩/ESC/选项关闭) */
+  .mobile-dropdown-sheet-floating .ant-drawer-content-wrapper {
+    border-top-left-radius: 16px;
+    border-top-right-radius: 16px;
+    box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.08);
+    overflow: hidden;
+  }
+  .mobile-dropdown-sheet-floating .ant-drawer-content {
+    border-top-left-radius: 16px;
+    border-top-right-radius: 16px;
+  }
+  .mobile-dropdown-sheet-floating .ant-drawer-body {
+    padding: 0;
+  }
+
+  /* 下拉 Sheet 列表项 */
+  .mobile-dropdown-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+  .mobile-dropdown-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 14px 16px;
+    font-size: 15px;
+    color: #202020;
+    border-bottom: 1px solid #f0f0f0;
+    cursor: pointer;
+    min-height: 44px;
+  }
+  .mobile-dropdown-item:active {
+    background: #f3f4f6;
+  }
+  .mobile-dropdown-item.active {
+    color: #2c5282;
+    font-weight: 500;
+  }
+  .mobile-dropdown-check {
+    color: #2c5282;
+    font-size: 16px;
+  }
+  .mobile-dropdown-footer {
+    padding: 12px 16px;
+    border-top: 1px solid #f0f0f0;
+    background: #fff;
+  }
+  .mobile-dropdown-confirm {
+    width: 100%;
+    height: 44px;
+    background: #2c5282;
+    color: #fff;
+    border: none;
+    border-radius: 4px;
+    font-size: 15px;
+    font-weight: 500;
+    cursor: pointer;
+  }
+
+  /* 设置面板 */
+  .mobile-settings-panel .ant-drawer-body {
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+  .mobile-settings-section {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .mobile-settings-label {
+    font-size: 13px;
+    color: #6b7280;
+    font-weight: 500;
+  }
+  .mobile-settings-params {
+    display: flex;
+    gap: 8px;
+    margin-top: 4px;
+  }
+  .mobile-param-slot {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .mobile-param-label {
+    font-size: 11px;
+    color: #9ca3af;
+  }
+  .mobile-param-slot .ant-input-number {
+    width: 100%;
+  }
+  .mobile-settings-footer {
+    display: flex;
+    gap: 12px;
+    margin-top: 24px;
+  }
+}
+
+/* 2026-07-31：副图加载/卸载骨架浮层 */
+.pane-skeleton-overlay {
+  position: absolute;
+  left: 8px;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 6px;
+  background: rgba(255, 255, 255, 0.92);
+  border: 1px solid #d0d0d0;
+  border-radius: 4px;
+  font-size: 11px;
+  line-height: 1.4;
+  pointer-events: none;
+  white-space: nowrap;
+  opacity: 0;
+  animation: skeleton-fade-in 180ms ease-out forwards;
+}
+.pane-skeleton-overlay.fading-out {
+  animation: skeleton-fade-out 220ms ease-in forwards;
+}
+.pane-skeleton-overlay .skeleton-bar {
+  display: inline-block;
+  height: 12px;
+  border-radius: 2px;
+  background: linear-gradient(90deg, #ececec 0%, #f5f5f5 50%, #ececec 100%);
+  background-size: 200% 100%;
+  animation: shimmer 1.2s linear infinite;
+}
+.pane-skeleton-overlay .skeleton-name { width: 56px; }
+.pane-skeleton-overlay .skeleton-value { width: 38px; }
+.pane-skeleton-overlay .skeleton-btn { width: 20px; }
+
+@keyframes shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+@keyframes skeleton-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes skeleton-fade-out {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+
+/* 移动端隐藏（与 .pane-title-overlay 一致） */
+@media (pointer: coarse) {
+  .pane-skeleton-overlay { display: none; }
+}

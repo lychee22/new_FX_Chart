@@ -1,0 +1,61 @@
+/* 图表内文字框 (TextBoxLayer) — antd 风格 */
+.lw-textbox {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'PingFang SC',
+    'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+  font-size: 12px;
+  line-height: 1.4;
+  color: #0000FF;        /* 保留旧蓝色 */
+  background: rgba(255, 255, 255, 0.85);
+  border: 1px dashed rgba(0, 0, 0, 0.25);
+  border-radius: 2px;
+  padding: 4px 6px;
+  box-sizing: border-box;
+  user-select: none;
+  cursor: grab;
+  transition: border-color 120ms ease, box-shadow 120ms ease;
+  /* 2026-07-29：宽高跟随内容；max-width 防止撑爆图表，min-height 1.4em 保留空白行高度 */
+  width: max-content;
+  max-width: 320px;
+  min-width: 0;
+  height: auto;
+  min-height: 1.4em;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.lw-textbox:hover {
+  border-color: rgba(0, 0, 0, 0.45);
+}
+
+.lw-textbox--selected {
+  border-color: #1677ff;        /* antd primary */
+  border-style: solid;
+  box-shadow: 0 0 0 2px rgba(22, 119, 255, 0.15);
+}
+
+.lw-textbox--editing {
+  border-color: #1677ff;        /* antd primary */
+  border-style: solid;
+  cursor: text;
+  user-select: text;
+  background: #ffffff;
+  box-shadow: 0 0 0 2px rgba(22, 119, 255, 0.15);
+}
+
+.lw-textbox__content {
+  outline: none;
+  min-height: 18px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.lw-textbox__content:empty::before {
+  content: attr(data-placeholder);
+  color: rgba(0, 0, 0, 0.35);
+  pointer-events: none;
+}
+
+/* 让拖动时不要选中文字 */
+.lw-textbox:active {
+  cursor: grabbing;
+}

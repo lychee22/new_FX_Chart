@@ -1,0 +1,260 @@
+server:
+  # 2026-07-22 11:59:52：Linux 部署时后端仅供同机前端代理访问，不直接暴露到公网。
+  address: 127.0.0.1
+  port: 23723
+
+spring:
+  application:
+    name: prosticks-chart-backend
+
+# ====== Prosticks 价源配置 ======
+prosticks:
+  # 价源选择: sample(模拟数据,默认) / http(HTTP REST 价源)
+  # 对接真实价源时改成 http, 并在下方 http 配置块填入真实信息
+  price-source: sample
+
+  # 2026-07-21 22:36:02：实时参数只在后端维护，前端连接后会收到实际生效值。
+  realtime:
+    enabled: true
+    tick-interval-ms: 100
+    bar-push-interval-ms: 500
+    indicator-push-interval-ms: 1000
+    heartbeat-interval-ms: 10000
+    history-count: 300
+
+  # 品种列表 (34个外汇/贵金属, 从配置加载)
+  # code: 内部代码  name: 显示名  external-symbol: 价源代码  decimals: 小数位
+  # ref-price / annual-vol: 仅模拟价源(sample)使用
+  instruments:
+    - code: JPY
+      name: USD/JPY
+      external-symbol: USDJPY
+      decimals: 2
+      ref-price: 108.5
+      annual-vol: 0.08
+    - code: AUD
+      name: AUD/USD
+      external-symbol: AUDUSD
+      decimals: 4
+      ref-price: 0.700
+      annual-vol: 0.09
+    - code: EUR
+      name: EUR/USD
+      external-symbol: EURUSD
+      decimals: 4
+      ref-price: 1.115
+      annual-vol: 0.07
+    - code: GBP
+      name: GBP/USD
+      external-symbol: GBPUSD
+      decimals: 4
+      ref-price: 1.270
+      annual-vol: 0.09
+    - code: CAD
+      name: USD/CAD
+      external-symbol: USDCAD
+      decimals: 4
+      ref-price: 1.330
+      annual-vol: 0.07
+    - code: CHF
+      name: USD/CHF
+      external-symbol: USDCHF
+      decimals: 4
+      ref-price: 0.990
+      annual-vol: 0.07
+    - code: NZD
+      name: NZD/USD
+      external-symbol: NZDUSD
+      decimals: 4
+      ref-price: 0.660
+      annual-vol: 0.10
+    - code: XAU
+      name: Gold
+      external-symbol: XAUUSD
+      decimals: 2
+      ref-price: 1420
+      annual-vol: 0.14
+    - code: XAG
+      name: Silver
+      external-symbol: XAGUSD
+      decimals: 3
+      ref-price: 16.5
+      annual-vol: 0.22
+    - code: CNY
+      name: USD/CNY
+      external-symbol: USDCNY
+      decimals: 4
+      ref-price: 6.90
+      annual-vol: 0.04
+    - code: CNH
+      name: USD/CNH
+      external-symbol: USDCNH
+      decimals: 4
+      ref-price: 6.95
+      annual-vol: 0.05
+    - code: HKD
+      name: USD/HKD
+      external-symbol: USDHKD
+      decimals: 4
+      ref-price: 7.83
+      annual-vol: 0.02
+    - code: SGD
+      name: USD/SGD
+      external-symbol: USDSGD
+      decimals: 4
+      ref-price: 1.365
+      annual-vol: 0.05
+    - code: EURAUD
+      name: EUR/AUD
+      external-symbol: EURAUD
+      decimals: 4
+      ref-price: 1.620
+      annual-vol: 0.08
+    - code: EURCAD
+      name: EUR/CAD
+      external-symbol: EURCAD
+      decimals: 4
+      ref-price: 1.485
+      annual-vol: 0.07
+    - code: EURCHF
+      name: EUR/CHF
+      external-symbol: EURCHF
+      decimals: 4
+      ref-price: 1.105
+      annual-vol: 0.05
+    - code: EURGBP
+      name: EUR/GBP
+      external-symbol: EURGBP
+      decimals: 4
+      ref-price: 0.880
+      annual-vol: 0.06
+    - code: EURJPY
+      name: EUR/JPY
+      external-symbol: EURJPY
+      decimals: 2
+      ref-price: 121.0
+      annual-vol: 0.09
+    - code: EURNZD
+      name: EUR/NZD
+      external-symbol: EURNZD
+      decimals: 4
+      ref-price: 1.690
+      annual-vol: 0.09
+    - code: GBPAUD
+      name: GBP/AUD
+      external-symbol: GBPAUD
+      decimals: 4
+      ref-price: 1.815
+      annual-vol: 0.10
+    - code: GBPCAD
+      name: GBP/CAD
+      external-symbol: GBPCAD
+      decimals: 4
+      ref-price: 1.690
+      annual-vol: 0.09
+    - code: GBPCHF
+      name: GBP/CHF
+      external-symbol: GBPCHF
+      decimals: 4
+      ref-price: 1.258
+      annual-vol: 0.08
+    - code: GBPJPY
+      name: GBP/JPY
+      external-symbol: GBPJPY
+      decimals: 2
+      ref-price: 137.8
+      annual-vol: 0.11
+    - code: GBPNZD
+      name: GBP/NZD
+      external-symbol: GBPNZD
+      decimals: 4
+      ref-price: 1.925
+      annual-vol: 0.11
+    - code: AUDCAD
+      name: AUD/CAD
+      external-symbol: AUDCAD
+      decimals: 4
+      ref-price: 0.930
+      annual-vol: 0.07
+    - code: AUDCHF
+      name: AUD/CHF
+      external-symbol: AUDCHF
+      decimals: 4
+      ref-price: 0.693
+      annual-vol: 0.08
+    - code: AUDJPY
+      name: AUD/JPY
+      external-symbol: AUDJPY
+      decimals: 2
+      ref-price: 76.0
+      annual-vol: 0.11
+    - code: AUDNZD
+      name: AUD/NZD
+      external-symbol: AUDNZD
+      decimals: 4
+      ref-price: 1.060
+      annual-vol: 0.07
+    - code: CADCHF
+      name: CAD/CHF
+      external-symbol: CADCHF
+      decimals: 4
+      ref-price: 0.745
+      annual-vol: 0.06
+    - code: CADJPY
+      name: CAD/JPY
+      external-symbol: CADJPY
+      decimals: 2
+      ref-price: 81.5
+      annual-vol: 0.10
+    - code: CHFJPY
+      name: CHF/JPY
+      external-symbol: CHFJPY
+      decimals: 2
+      ref-price: 109.5
+      annual-vol: 0.10
+    - code: NZDCAD
+      name: NZD/CAD
+      external-symbol: NZDCAD
+      decimals: 4
+      ref-price: 0.875
+      annual-vol: 0.08
+    - code: NZDCHF
+      name: NZD/CHF
+      external-symbol: NZDCHF
+      decimals: 4
+      ref-price: 0.654
+      annual-vol: 0.09
+    - code: NZDJPY
+      name: NZD/JPY
+      external-symbol: NZDJPY
+      decimals: 2
+      ref-price: 71.5
+      annual-vol: 0.12
+    - code: SGDJPY
+      name: SGD/JPY
+      external-symbol: SGDJPY
+      decimals: 2
+      ref-price: 79.5
+      annual-vol: 0.08
+
+  # HTTP 价源配置 (当 price-source: http 时生效)
+  # 对接真实价源时填入:
+  http:
+    base-url: ""                          # 如 https://api.example.com/v1
+    api-key: ""                           # API Key
+    bars-path: /candles/{symbol}?interval={interval}&count={count}
+
+# Springdoc / Swagger UI 配置
+springdoc:
+  swagger-ui:
+    path: /swagger-ui.html
+    operationsSorter: method
+    tagsSorter: alpha
+    doc-expansion: none
+  api-docs:
+    path: /v3/api-docs
+  packages-to-scan: com.prosticks.chart.controller
+
+logging:
+  level:
+    com.prosticks.chart: INFO

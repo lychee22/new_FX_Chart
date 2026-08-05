@@ -1,0 +1,151 @@
+<HTML>
+
+<HEAD>
+<TITLE>Forex Chart</TITLE>
+<meta http-equiv=Content-Type content=text/html; charset=iso-8859-1>
+<link rel=stylesheet type=text/css href=css/main.css>
+<meta name=viewport content="user-scalable=no, width=device-width, initial-scale=1, maximum-scale=1">
+
+
+<SCRIPT TYPE="text/javascript" src="js/jquery-2.1.4.min.js"></script>
+<SCRIPT TYPE="text/javascript" src="js/dateformat.js"></script>
+<SCRIPT TYPE="text/javascript" src="js/simplechart.js"></script>
+
+
+</HEAD>
+
+<BODY LEFTMARGIN="0" TOPMARGIN="0" MARGINWIDTH="0" MARGINHEIGHT="0" onload="initChart('cvsChart','prosticks.hk',800,600,0);updateChart();">
+
+<form name=chartForm>
+<input type=hidden name=barno id=barno value=60>
+<input type=hidden name=exch id=exch value="CU">
+
+	  	<table width=100% cellpadding=0 cellspacing=0 border=0><tr height=10 valign=bottom>
+		<td width=5% class=subhead3>
+			<select name="code" id="code" class=select onchange="updateChart();">
+				<option value="JPY">USD/JPY</option>
+				<option value="AUD">AUD/USD</option>
+				<option value="EUR">EUR/USD</option>
+				<option value="GBP">GBP/USD</option>
+				<option value="CAD">USD/CAD</option>
+				<option value="CHF">USD/CHF</option>
+				<option value="NZD">NZD/USD</option>
+				<option value="XAU">Gold</option>
+				<option value="XAG">Silver</option>
+				<option value="CNY">USD/CNY</option>
+				<option value="CNH">USD/CNH</option>
+				<option value="HKD">USD/HKD</option>
+				<option value="SGD">USD/SGD</option>
+				<option value="EURAUD">EUR/AUD</option>
+				<option value="EURCAD">EUR/CAD</option>
+				<option value="EURCHF">EUR/CHF</option>
+				<option value="EURGBP">EUR/GBP</option>
+				<option value="EURJPY">EUR/JPY</option>
+				<option value="EURNZD">EUR/NZD</option>
+				<option value="GBPAUD">GBP/AUD</option>
+				<option value="GBPCAD">GBP/CAD</option>
+				<option value="GBPCHF">GBP/CHF</option>
+				<option value="GBPJPY">GBP/JPY</option>
+				<option value="GBPNZD">GBP/NZD</option>
+				<option value="AUDCAD">AUD/CAD</option>
+				<option value="AUDCHF">AUD/CHF</option>
+				<option value="AUDJPY">AUD/JPY</option>
+				<option value="AUDNZD">AUD/NZD</option>
+				<option value="CADCHF">CAD/CHF</option>
+				<option value="CADJPY" >CAD/JPY</option>
+				<option value="CHFJPY">CHF/JPY</option>
+				<option value="NZDCAD">NZD/CAD</option>
+				<option value="NZDCHF">NZD/CHF</option>
+				<option value="NZDJPY">NZD/JPY</option>
+				<option value="SGDJPY">SGD/JPY</option>
+			</select>
+		</td>
+		<td width=1% class=subhead3>
+			<select name="interval" id="interval" class=select60 onchange="updateChart();">
+				<option value=3 >1-Min</option>
+				<option value=4  selected>5-Min</option>
+				<option value=5 >10-Min</option>
+				<option value=6 >15-Min</option>
+				<option value=7 >30-Min</option>
+				<option value=8 >1-Hour</option>
+				<option value=9 >2-Hour</option>
+				<option value=10 >4-Hour</option>
+				<option value=0 >Daily</option>
+				<option value=1 >Weekly</option>
+				<option value=2 >Monthly</option>
+			</select>
+		</td>
+		<td width=1% class=subhead3>
+			<select name="type" id="type" class=select onchange="updateChart();">
+				<option value=0 >Prosticks</option>
+				<option value=2 >Bar Chart</option>
+				<option value=3 >Bar &amp; Modal</option>
+				<option value=4 selected>Candlesticks</option>
+				<option value=5 >Modal lines</option>
+				<option value=6 >Line Chart</option>
+			</select>
+		</td>
+		<td width=1% class=subhead3>
+			<select name="upper" id="upper" class=select3 onchange="updateChart();">
+				<option value=0 >Upper</option>
+				<option value=1 >SMA</option>
+				<option value=2 >Bollinger Bands</option>
+				<option value=3 >EMA</option>
+				<option value=4 >SAR</option>
+				<option value=5 >Ichimoku</option>
+			</select>
+		</td>
+		<td width=1% class=subhead3>
+			<select name="lower" id="lower" class=select3 onchange="updateChart();">
+				<option value=0 >Lower</option>
+				<option value=2 >RSI</option>
+				<option value=3 >MACD</option>
+				<option value=4 >Stochastic</option>
+				<option value=5 >Momentum</option>
+				<option value=6 >PercentageR</option>
+				<option value=8 >Modal Count</option>
+				<option value=9 >ROC</option>
+				<option value=10 >ADX</option>
+				<option value=12 >Volatility</option>
+			</select>
+		</td>
+		<td width=1% class=subhead3>
+			<select name="tool" id="tool" class=select3 onchange="updateChart();">
+				<option value=0 >Tools</option>
+				<option value=1 >Draw Line</option>
+				<option value=2 >Parallel Lines</option>
+				<option value=3 >Clear Last Line</option>
+				<option value=4 >Clear All Lines</option>
+				<option value=5 >Fibonacci Retracement</option>
+				<option value=6 >Fibonacci Projection</option>
+				<option value=7 >Clear Fibonacci</option>
+				<option value=8 >Text Box</option>
+				<option value=9 >Clear Last Text</option>
+				<option value=10 >Clear All Text</option>
+			</select>
+		</td>
+		<td width=90% class=subhead3>
+		<table width=100% cellpadding=0 cellspacing=0 border=0><tr valign=bottom><td width=5>&nbsp;</td>
+		<td>
+		<img src=images/zoomout.gif name=zoomout width=16 height=16 border=0 onclick="zoomChart(0);">
+		<img src=images/zoomin.gif name=zoomin width=16 height=16 border=0 onclick="zoomChart(1);">
+		<img src=images/larrow.gif name=shiftleft width=12 height=12 border=0 onclick="shiftChart(0);">
+		<img src=images/rarrow.gif name=shiftright width=12 height=12 border=0 onclick="shiftChart(1);">
+		<img src=images/export.gif name=export width=16 height=16 border=0 onclick="exportChart();">
+		</td></tr></table>
+		</td>
+
+	</tr>
+	</table>
+	<table width=100% cellpadding=0 cellspacing=0 border=0><tr>
+	<tr><td valign=top align=left colspan=10>
+		<div style="position: relative;">
+			<canvas id=cvsChart width=800 height=600 style="position: absolute; left: 0; top: 0; z-index: 0; border:1px solid #E0E0E0;">Please upgrade your browser.</canvas>
+			<canvas id=cvsChartOver width=800 height=600 style="position: absolute; left: 0; top: 0; z-index: 1; background-color: transparent;">&nbsp;</canvas>
+		</div>
+	</td></tr>
+	</table>
+	</form>
+
+</BODY>
+</HTML>
