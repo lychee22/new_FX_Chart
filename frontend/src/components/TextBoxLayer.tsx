@@ -19,10 +19,16 @@ export interface TextBoxData {
   text: string;
 }
 
+/** 2026-08-05：文字框 + 其在 DrawingManager.objects 中的下标（统一以 objects 下标为准）。 */
+export interface TextBoxEntry {
+  box: TextBoxData;
+  index: number;
+}
+
 interface Props {
   chart: IChartApi | null;
   series: ISeriesApi<any> | null;
-  textBoxes: TextBoxData[];
+  textBoxes: TextBoxEntry[];
   selectedIndex: number | null;        // 由上层控制
   editingIndex: number | null;          // 由上层控制
   onSelect: (index: number | null) => void;
@@ -90,13 +96,13 @@ export default function TextBoxLayer(props: Props) {
     }
     const ts = chart.timeScale();
     const next = new Map<number, { left: number; top: number; visible: boolean }>();
-    textBoxes.forEach((tb, idx) => {
-      const x = ts.timeToCoordinate(tb.t);
-      const y = series.priceToCoordinate(tb.p);
+    textBoxes.forEach(({ box, index }) => {
+      const x = ts.timeToCoordinate(box.t);
+      const y = series.priceToCoordinate(box.p);
       if (x === null || y === null) {
-        next.set(idx, { left: 0, top: 0, visible: false });
+        next.set(index, { left: 0, top: 0, visible: false });
       } else {
-        next.set(idx, { left: x as number, top: y as number, visible: true });
+        next.set(index, { left: x as number, top: y as number, visible: true });
       }
     });
     setPositions(next);
@@ -132,11 +138,11 @@ export default function TextBoxLayer(props: Props) {
         zIndex: 5,
       }}
     >
-      {textBoxes.map((tb, idx) => {
-        const pos = positions.get(idx);
+      {textBoxes.map(({ box, index }) => {
+        const pos = positions.get(index);
         if (!pos || !pos.visible) return null;
-        const isSelected = selectedIndex === idx;
-        const isEditing = editingIndex === idx;
+        const isSelected = selectedIndex === index;
+        const isEditing = editingIndex === index;
         const style: CSSProperties = {
           position: 'absolute',
           left: pos.left,
@@ -145,7 +151,7 @@ export default function TextBoxLayer(props: Props) {
         };
         return (
           <div
-            key={idx}
+            key={index}
             className={
               'lw-textbox'
               + (isSelected ? ' lw-textbox--selected' : '')
@@ -156,13 +162,13 @@ export default function TextBoxLayer(props: Props) {
               // 左键才处理
               if (e.button !== 0) return;
               e.stopPropagation();
-              onSelect(idx);
+              onSelect(index);
               // 2026-07-29：用 box 的 viewport 位置推算 grab offset，确保抓点不在
               // 左上角时整体拖动不会"漂"。box-sizing:border-box 下 anchor 就在
               // 外边框左上角，所以 boxRect.left/top 就是 anchor viewport x/y。
               const boxRect = e.currentTarget.getBoundingClientRect();
               dragState.current = {
-                index: idx,
+                index,
                 startClientX: e.clientX,
                 startClientY: e.clientY,
                 grabOffsetX: boxRect.left - e.clientX,
@@ -174,7 +180,7 @@ export default function TextBoxLayer(props: Props) {
             }}
             onPointerMove={(e) => {
               const ds = dragState.current;
-              if (!ds || ds.index !== idx) return;
+              if (!ds || ds.index !== index) return;
               // 阈值：viewport 距离
               if (!ds.moved
                   && Math.hypot(e.clientX - ds.startClientX, e.clientY - ds.startClientY) < DRAG_THRESHOLD) {
@@ -194,44 +200,44 @@ export default function TextBoxLayer(props: Props) {
               const time = ts.coordinateToTime(localX) as Time | null;
               const price = series.coordinateToPrice(localY);
               if (time !== null && price !== null && Number.isFinite(price)) {
-                onMove(idx, time, price);
+                onMove(index, time, price);
               }
             }}
             onPointerUp={(e) => {
               const ds = dragState.current;
-              if (!ds || ds.index !== idx) return;
+              if (!ds || ds.index !== index) return;
               const target = e.currentTarget;
               try { target.releasePointerCapture(e.pointerId); } catch { /* ignore */ }
               const wasMoved = ds.moved;
               dragState.current = null;
               if (!wasMoved) {
                 // 单击未拖动 → 进入编辑
-                onRequestEdit(idx);
+                onRequestEdit(index);
               }
             }}
           >
             <div
               ref={(el) => {
-                if (el) contentRefs.current.set(idx, el);
-                else contentRefs.current.delete(idx);
+                if (el) contentRefs.current.set(index, el);
+                else contentRefs.current.delete(index);
               }}
               className="lw-textbox__content"
               contentEditable={isEditing}
               suppressContentEditableWarning
               spellCheck={false}
               onBlur={() => {
-                const el = contentRefs.current.get(idx);
+                const el = contentRefs.current.get(index);
                 if (!el) return;
-                onCommit(idx, el.innerText.trim());
+                onCommit(index, el.innerText.trim());
               }}
               onKeyDown={(e) => {
                 // 编辑态禁用 Delete/Backspace 删除自身（由上层控制）
                 if (isEditing) {
                   if (e.key === 'Escape') {
                     e.preventDefault();
-                    const el = contentRefs.current.get(idx);
+                    const el = contentRefs.current.get(index);
                     if (el) {
-                      el.innerText = tb.text;
+                      el.innerText = box.text;
                       el.blur();
                     }
                     onSelect(null);
@@ -243,9 +249,9 @@ export default function TextBoxLayer(props: Props) {
               }}
               onClick={(e) => e.stopPropagation()}
               onDoubleClick={(e) => e.stopPropagation()}
-              data-placeholder={tb.text ? undefined : placeholder}
+              data-placeholder={box.text ? undefined : placeholder}
             >
-              {tb.text}
+              {box.text}
             </div>
           </div>
         );

@@ -647,11 +647,17 @@ export class DrawingManager implements ISeriesPrimitive<Time> {
     return null;
   }
 
-  /** 返回当前所有文字框 (快照)。 */
-  getTextBoxes(): TextBox[] {
-    const out: TextBox[] = [];
-    for (const o of this.objects) {
-      if (o.type === TOOL.TEXTBOX) out.push(o as TextBox);
+  /**
+   * 2026-08-05：返回当前所有文字框 (快照)，附 objects 数组下标。
+   * 之前只返回过滤后的纯数组，与 addTextBox/updateTextBox/deleteTextBox/
+   * moveTextBox 的 objects 下标入参是两套语义 — 文字框前存在画线等对象时
+   * 编辑/删除/拖动会命中错误对象。统一以 objects 下标为准。
+   */
+  getTextBoxes(): Array<{ box: TextBox; index: number }> {
+    const out: Array<{ box: TextBox; index: number }> = [];
+    for (let i = 0; i < this.objects.length; i++) {
+      const o = this.objects[i];
+      if (o.type === TOOL.TEXTBOX) out.push({ box: o as TextBox, index: i });
     }
     return out;
   }
