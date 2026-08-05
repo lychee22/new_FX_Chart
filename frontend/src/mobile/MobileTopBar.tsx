@@ -2,7 +2,7 @@
 // 参考期望效果 -709069893.png / 685664164.png
 // 2026-08-04：标题区域支持点击切换品种 (需求3), 与搜索图标同一入口。
 
-import { ArrowLeftOutlined, DownOutlined, FullscreenOutlined, SearchOutlined } from '@ant-design/icons';
+import { ArrowLeftOutlined, DownOutlined, FullscreenOutlined, ReloadOutlined, SearchOutlined } from '@ant-design/icons';
 import { Button } from 'antd';
 import { useI18n } from '../i18n';
 import type { Instrument } from '../types';
@@ -14,10 +14,12 @@ interface MobileTopBarProps {
   onSearch?: () => void;
   /** 2026-08-04：点击标题(货币名) → 打开品种切换 (需求3) */
   onTitleClick?: () => void;
+  /** 2026-08-05：手动刷新 — 重拉 K 线 + 指标全量数据 (断线补数据/数据异常重试) */
+  onRefresh?: () => void;
 }
 
 /** 移动端顶部导航 (44px 高, 含安全区适配) */
-export function MobileTopBar({ instrument, onBack, onFullscreen, onSearch, onTitleClick }: MobileTopBarProps) {
+export function MobileTopBar({ instrument, onBack, onFullscreen, onSearch, onTitleClick, onRefresh }: MobileTopBarProps) {
   const { lang } = useI18n();
   const main = instrument?.name ?? '—';
   const sub = instrument ? (lang === 'en' ? instrument.code : secondaryName(instrument.code, lang)) : '';
@@ -29,6 +31,18 @@ export function MobileTopBar({ instrument, onBack, onFullscreen, onSearch, onTit
         {sub && <div className="mobile-topbar-sub">{sub}</div>}
         <DownOutlined className="mobile-topbar-title-caret" />
       </button>
+      {/* 2026-08-05：手动刷新按钮 — 断线补数据 / 加载失败重试 */}
+      {onRefresh && (
+        <div className="mobile-topbar-actions">
+          <Button
+            type="text"
+            shape="circle"
+            icon={<ReloadOutlined />}
+            onClick={onRefresh}
+            aria-label="Refresh"
+          />
+        </div>
+      )}
       {/* <div className="mobile-topbar-actions">
         <Button
           type="text"

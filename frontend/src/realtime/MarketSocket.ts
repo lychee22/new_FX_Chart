@@ -10,6 +10,9 @@ interface Subscription {
 interface MarketSocketHandlers {
   onBar: (message: RealtimeBarMessage) => void;
   onIndicators: (message: RealtimeIndicatorsMessage) => void;
+  /** 2026-08-05：断线重连成功时回调（初始连接不触发）— 上层据此重拉 REST 全量数据，
+   *  补齐断线期间丢失的 K 线/指标（WS 只推送单点增量, 无法回溯断线空洞）。 */
+  onReconnect?: () => void;
 }
 
 /** 单一 WebSocket 连接，负责订阅切换、心跳应答和指数退避重连。 */
@@ -46,10 +49,14 @@ export class MarketSocket {
     const socket = new WebSocket(`${protocol}//${window.location.host}/ws/market`);
     this.socket = socket;
     socket.onopen = () => {
+      // 2026-08-05：reconnectAttempt > 0 说明是断线重连（初始连接为 0）— 先置回,
+      // 再通知上层重拉 REST 数据。重连期间错过的增量只能靠全量补齐。
+      const isReconnect = this.reconnectAttempt > 0;
       if (this.reconnectTimer !== null) window.clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
       this.reconnectAttempt = 0;
       this.sendSubscription();
+      if (isReconnect) this.handlers.onReconnect?.();
     };
     socket.onmessage = (event) => this.handleMessage(event.data);
     socket.onclose = () => {

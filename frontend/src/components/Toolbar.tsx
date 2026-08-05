@@ -26,6 +26,8 @@ interface ToolbarProps {
   onShiftLeft: () => void;
   onShiftRight: () => void;
   onExport: () => void;
+  /** 2026-08-05：手动刷新 — 重拉 K 线 + 指标全量数据 (断线补数据/数据异常重试) */
+  onRefresh: () => void;
   onUndo: () => void;
   canUndo: boolean;
   /** 2026-07-31：清除所有已绘制对象 */
@@ -212,6 +214,8 @@ export default function Toolbar(props: ToolbarProps) {
         aria-label={t('ClearAll')}
       >🧹</button>
       <button type="button" className="icon-btn" onClick={p.onExport} title="Export" aria-label="Export">⤓</button>
+      {/* 2026-08-05：手动刷新 — 断线补数据 / 加载失败重试 */}
+      <button type="button" className="icon-btn" onClick={p.onRefresh} title={t('Refresh')} aria-label={t('Refresh')}>⟳</button>
 
       {/* 语言切换 */}
       <div className="lang-group" aria-label="Language">

@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { message } from 'antd';
 import Toolbar from './components/Toolbar';
 import ChartPanel from './components/ChartPanel';
 import MobileLayout from './mobile/MobileLayout';
@@ -119,6 +120,10 @@ export default function App() {
 
   const exportRef = useRef<() => void>(() => {});
 
+  // 2026-08-05：刷新入口 — ChartPanel 挂载后注册 refreshAllData,
+  // 工具栏(PC) / 顶栏(移动端)的刷新按钮统一调用
+  const refreshRef = useRef<() => void>(() => {});
+
   // 2026-07-30：撤销 / 回滚 — 通知 ChartPanel 移除最后一个绘图对象
   const undoTickRef = useRef(0);
   // 撤销后需要刷新 canUndo, 维护一个递增计数器让子组件订阅
@@ -217,8 +222,14 @@ export default function App() {
 
   // ---- 加载品种列表 ----
   useEffect(() => {
-    marketApi.getInstruments().then(setInstruments).catch(console.error);
-  }, []);
+    marketApi.getInstruments()
+      .then(setInstruments)
+      .catch((e) => {
+        console.error('加载品种列表失败', e);
+        // 2026-08-05：品种列表失败不再静默 (之前只回退 decimals=2, 下拉为空无任何提示)
+        message.error(t('LoadFailed'));
+      });
+  }, [t]);
 
   // ---- 更新标题 ----
   useEffect(() => {
@@ -240,6 +251,8 @@ export default function App() {
   const onShiftRight = useCallback(() => (window as any).__chartZoom?.shiftRight(), []);
   const onExport = useCallback(() => exportRef.current(), []);
   const registerExport = useCallback((fn: () => void) => { exportRef.current = fn; }, []);
+  const onRefresh = useCallback(() => refreshRef.current(), []);
+  const registerRefresh = useCallback((fn: () => void) => { refreshRef.current = fn; }, []);
 
   return (
     <I18nContext.Provider value={i18nValue}>
@@ -274,6 +287,8 @@ export default function App() {
             onReorderLower={reorderLower}
             onRemoveLower={removeLower}
             registerExport={registerExport}
+            onRefresh={onRefresh}
+            registerRefresh={registerRefresh}
             onUndo={onUndo}
             canUndo={canUndo}
             registerCanUndo={registerCanUndo}
@@ -302,6 +317,7 @@ export default function App() {
               onShiftLeft={onShiftLeft}
               onShiftRight={onShiftRight}
               onExport={onExport}
+              onRefresh={onRefresh}
               onUndo={onUndo}
               canUndo={canUndo}
               canClear={canClear}
@@ -325,6 +341,7 @@ export default function App() {
               onReorderLower={reorderLower}
               onRemoveLower={removeLower}
               registerExport={registerExport}
+              registerRefresh={registerRefresh}
               onUndo={onUndo}
               canUndo={canUndo}
               registerCanUndo={registerCanUndo}

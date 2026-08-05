@@ -147,6 +147,8 @@ interface ChartPanelProps {
   /** 2026-07-29：删除指定副图 */
   onRemoveLower: (tech: number) => void;
   registerExport: (fn: () => void) => void;
+  /** 2026-08-05：注册"手动刷新/断线重连重拉"入口 — 工具栏刷新按钮与 WS 重连回调共用 */
+  registerRefresh?: (fn: () => void) => void;
   /** 2026-07-30：撤销最后一个绘图对象 */
   onUndo: () => void;
   /** 2026-07-30：当前是否存在可撤销对象 (用于按钮 disabled) */
@@ -228,7 +230,12 @@ export default function ChartPanel(props: ChartPanelProps) {
   // 订阅回调改走 ref.current, 与 fullscreenRef/mobileRef 同一模式。
   const updateInfoOverlayRef = useRef<((param: MouseEventParams<Time>) => void) | null>(null);
   const handleChartClickRef = useRef<((param: MouseEventParams<Time>) => void) | null>(null);
+  // 2026-08-05：刷新入口镜像 — 挂载期订阅的 WS 重连回调与工具栏刷新按钮经由 ref 调用,
+  // 确保每次都执行最新闭包 (props.code/interval/params 随渲染更新)。
+  const refreshAllRef = useRef<(() => void) | null>(null);
   const [info, setInfo] = useState<string>('');
+  // 2026-08-05：3 秒自动隐藏定时器 — 触屏松开/离开后自动调 clearCrosshairPosition 隐藏库光标
+  const hideTimerRef = useRef<number | null>(null);
   const [toolHint, setToolHint] = useState<string>('');
   // 2026-07-27：文字框 React state — 与 DrawingManager 双向同步，由订阅回调驱动
   // 2026-08-05：改存 {box, index}（index 为 DrawingManager.objects 下标），
@@ -434,6 +441,8 @@ export default function ChartPanel(props: ChartPanelProps) {
         drawingMgrRef.current?.setTool(TOOL.NONE);
       } catch (e) {
         console.error('加载数据失败', e);
+        // 2026-08-05：K 线加载失败不再静默 — 用户可见提示, 可通过工具栏/顶栏刷新按钮重试
+        message.error(t('LoadFailed'));
       }
     })();
     return () => { cancelled = true; };
@@ -706,6 +715,13 @@ export default function ChartPanel(props: ChartPanelProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [props.code]);
 
+  // ---- 2026-08-05：注册刷新入口 (工具栏/顶栏刷新按钮 + WS 重连重拉共用 refreshAllData) ----
+  useEffect(() => {
+    props.registerRefresh?.(() => { void refreshAllRef.current?.(); });
+    return () => props.registerRefresh?.(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // ---- 2026-07-30：撤销 / 回滚 ----
   // 1) 监听来自 App 的撤销事件 (Ctrl+Z / toolbar / 移动按钮)
   useEffect(() => {
@@ -776,6 +792,37 @@ export default function ChartPanel(props: ChartPanelProps) {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   });
+
+  // ---- 主图数据映射 (renderMainSeries 与刷新/重连重拉共用) ----
+  // 2026-08-05：从 renderMainSeries 提取 — 刷新时对现有 series 就地 setData,
+  // 不重建 series (保持时间轴缩放与绘图 primitive 引用), 故数据映射抽出来共用。
+  const buildMainSeriesData = (bars: Bar[], chartType: number): any[] => {
+    if (chartType === TYPE.LINE || chartType === TYPE.MODAL_LINE) {
+      return bars
+        .filter((b) => b.h > 0)
+        .map((b) => ({
+          time: b.time as Time,
+          value: chartType === TYPE.MODAL_LINE ? b.mp : b.c,
+        }))
+        // 模态线跳过 mp=0 的点
+        .filter((d) => chartType !== TYPE.MODAL_LINE || (d.value as number) > 0);
+    }
+    if (chartType === TYPE.AREA) {
+      return bars.filter((b) => b.h > 0).map((b) => ({ time: b.time as Time, value: b.c }));
+    }
+    // BAR / BAR_MODAL / CANDLE / PROSTICKS / MAIN_VOLUME 均为 OHLC 数组
+    return bars.filter((b) => b.h > 0).map((b) => ({
+      time: b.time as Time, open: b.o, high: b.h, low: b.l, close: b.c,
+    }));
+  };
+
+  /** MAIN_VOLUME 叠加成交量的数据映射 (renderMainSeries 与刷新共用) */
+  const buildVolumeData = (bars: Bar[], palette: NationPalette): any[] =>
+    bars.filter((b) => b.h > 0).map((b) => ({
+      time: b.time as Time,
+      value: b.v,
+      color: b.c >= b.o ? palette.bar.upColor : palette.bar.downColor,
+    }));
 
   // ---- 渲染主图序列 ----
   const renderMainSeries = (bars: Bar[], chartType: number, decimals: number) => {
@@ -1037,6 +1084,9 @@ export default function ChartPanel(props: ChartPanelProps) {
     const client = new MarketSocket({
       onBar: handleRealtimeBar,
       onIndicators: handleRealtimeIndicators,
+      // 2026-08-05：断线重连成功后重拉 REST 全量数据 — 补齐断线期间丢失的 K 线
+      // (WS 增量只推最新点, 无法回溯空洞) 与指标数据 (自定义参数时 WS 增量被忽略)。
+      onReconnect: () => { void refreshAllRef.current?.(); },
     });
     socketRef.current = client;
     client.subscribe({
@@ -1055,7 +1105,9 @@ export default function ChartPanel(props: ChartPanelProps) {
     });
   }, [props.code, props.interval, props.upper, props.lower]);
 
-  const loadOverlayIndicator = async (upper: number, code: string, interval: number, params?: number[]) => {
+  const loadOverlayIndicator = async (
+    upper: number, code: string, interval: number, params?: number[], preserveScale = false,
+  ) => {
     const chart = chartRef.current;
     if (!chart || !mainSeriesRef.current) return;
     const requestId = ++overlayRequestRef.current;
