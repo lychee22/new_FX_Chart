@@ -122,7 +122,7 @@ import { IchimokuPrimitive } from '../primitives/IchimokuPrimitive';
 import { DrawingManager } from '../drawing/DrawingManager';
 import { TOOL } from '../drawing/tools';
 import { useI18n } from '../i18n';
-import TextBoxLayer, { type TextBoxData } from './TextBoxLayer';
+import TextBoxLayer, { type TextBoxEntry } from './TextBoxLayer';
 
 interface ChartPanelProps {
   code: string;
@@ -205,6 +205,10 @@ export default function ChartPanel(props: ChartPanelProps) {
   // 2026-08-04：任一指标参数非默认时置 true — WS 的 INDICATORS 增量按默认参数推送,
   // 与自定义参数结果不一致, 必须忽略 (主图 BAR 实时不受影响)。
   const wsIndicatorsDisabledRef = useRef(false);
+  // 2026-08-05：图表触屏切换副图触发 WS 重订阅后, 后端会重推全量 INDICATORS (含 upper),
+  // 用历史首点 update 会把叠加指标线拉回起点造成主图指标重绘 — 触屏切换时置 true,
+  // 抑制下一次 upper 增量(一次性); 设置面板入口不抑制, 保持原行为。
+  const suppressUpperRef = useRef(false);
   const overlaySeriesRef = useRef<ISeriesApi<any>[]>([]);   // 叠加指标序列
   const overlayRequestRef = useRef(0);
   // 副图指标序列: paneIndex → series[] (每个副图占一个独立 pane, 支持多个叠加)
@@ -219,10 +223,17 @@ export default function ChartPanel(props: ChartPanelProps) {
     code: props.code, interval: props.interval, upper: props.upper, lower: props.lower,
     chartType: props.chartType,
   };
+  // 2026-08-05：镜像最新 updateInfoOverlay / handleChartClick — 挂载 effect 只执行一次,
+  // 直接引用会捕获首帧渲染的旧闭包 (props.decimals / t 随品种、语言变化后不更新)。
+  // 订阅回调改走 ref.current, 与 fullscreenRef/mobileRef 同一模式。
+  const updateInfoOverlayRef = useRef<((param: MouseEventParams<Time>) => void) | null>(null);
+  const handleChartClickRef = useRef<((param: MouseEventParams<Time>) => void) | null>(null);
   const [info, setInfo] = useState<string>('');
   const [toolHint, setToolHint] = useState<string>('');
   // 2026-07-27：文字框 React state — 与 DrawingManager 双向同步，由订阅回调驱动
-  const [textBoxes, setTextBoxes] = useState<TextBoxData[]>([]);
+  // 2026-08-05：改存 {box, index}（index 为 DrawingManager.objects 下标），
+  // 与 addTextBox/updateTextBox/deleteTextBox/moveTextBox 的入参统一。
+  const [textBoxes, setTextBoxes] = useState<TextBoxEntry[]>([]);
   const [selectedTextBox, setSelectedTextBox] = useState<number | null>(null);
   const [editingTextBox, setEditingTextBox] = useState<number | null>(null);
   // 2026-07-29：副图标题浮层 — 每个 pane 相对容器顶部的像素偏移（用于浮层定位）
@@ -298,18 +309,26 @@ export default function ChartPanel(props: ChartPanelProps) {
     paneSeriesMapRef.current = new Map();
 
     // 2026-07-27：把文字框变更同步到 React state
-    const refreshTextBoxes = () => setTextBoxes(mgr.getTextBoxes());
+    // 2026-08-05：删除对象后 objects 下标前移 — 失效保护: 选中/编辑下标不再指向
+    // 任何现存文字框时置空 (函数式更新, 避免挂载 effect 闭包读到旧 state),
+    // 防止 Delete 键按旧下标误删前移后的其他对象。
+    const refreshTextBoxes = () => {
+      const data = mgr.getTextBoxes();
+      setTextBoxes(data);
+      setSelectedTextBox((prev) => (prev === null || data.some((d) => d.index === prev) ? prev : null));
+      setEditingTextBox((prev) => (prev === null || data.some((d) => d.index === prev) ? prev : null));
+    };
     refreshTextBoxes();
     const unsubscribeTextBoxes = mgr.subscribeTextBoxesChanged(refreshTextBoxes);
 
     // 十字光标移动 → 更新 OHLC 读数
     chart.subscribeCrosshairMove((param: MouseEventParams<Time>) => {
-      updateInfoOverlay(param);
+      updateInfoOverlayRef.current?.(param);
     });
 
     // 点击 → 绘图工具交互
     chart.subscribeClick((param: MouseEventParams<Time>) => {
-      handleChartClick(param);
+      handleChartClickRef.current?.(param);
     });
 
     // 2026-07-30：右键 → 取消当前正在进行的画线 (清空点击阶段/预览, 工具保持选中)
@@ -384,6 +403,8 @@ export default function ChartPanel(props: ChartPanelProps) {
       setSelectedTextBox(null);
       setEditingTextBox(null);
       delete (window as any).__chartZoom;
+      // 2026-08-05：清理触屏切换标志, 避免卸载残留污染下次挂载后的设置面板操作
+      delete (window as any).__mobileLowerTap;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -454,6 +475,26 @@ export default function ChartPanel(props: ChartPanelProps) {
     // 否则会和 loadLowerIndicators 并发重复创建同一个 pane（导致 priceScale index 错误）。
     if (!lowerInitializedRef.current) return;
 
+    // 2026-08-05：消费触屏切换标志（一次性）— 图表内触屏切换副图入口 (MobileLayout.tapReplaceLower)
+    // 会设置 __mobileLowerTap；设置面板入口不设置。触屏切换：不重置主图缩放、不重绘主图叠加指标。
+    // 统一在这里消费（无论走替换/删除/新增哪条分支），避免标志残留污染后续设置面板操作。
+    const isTapSwitch = (window as any).__mobileLowerTap !== undefined;
+    if (isTapSwitch) delete (window as any).__mobileLowerTap;
+
+    // 2026-08-05：触屏切换时 params effect 先以「旧 lower + 新参数」跑了一帧（App 对 lower 有
+    // 16ms debounce），wsIndicatorsDisabledRef 可能被误置 true 且 params effect 不会重跑 —
+    // 这里用新 lower 重算修正（默认参数 → false，WS 指标增量恢复）。
+    wsIndicatorsDisabledRef.current =
+      !isDefaultParams('upper', props.upper, props.upperParams) ||
+      curr.some((t) => !isDefaultParams('lower', t, props.lowerParams));
+
+    // 2026-08-05：触屏切换时本帧 WS 重订阅会触发后端重推全量 INDICATORS（含 upper）—
+    // 在本 effect 执行时（WS 重订阅 effect 之前）同步武装一次性抑制标志，消除上一轮
+    // "calculate 完成后才武装"的竞态（WS 推送先到导致抑制落空、叠加指标被历史首点拉回重绘）。
+    if (isTapSwitch && props.upper !== UPPER_TECH.NONE) {
+      suppressUpperRef.current = true;
+    }
+
     const prev = lastLowerRef.current;
     const prevSet = new Set(prev);
     const currSet = new Set(curr);
@@ -468,7 +509,7 @@ export default function ChartPanel(props: ChartPanelProps) {
     // 不再走"删除 pane → 骨架淡出 → 重建 pane"的路径, 副图高度全程不变。
     if (removed.length === 1 && added.length === 1) {
       lastLowerRef.current = [...curr];
-      replaceLowerPane(removed[0], added[0], props.code, props.interval);
+      replaceLowerPane(removed[0], added[0], props.code, props.interval, isTapSwitch);
       return;
     }
 
@@ -481,9 +522,10 @@ export default function ChartPanel(props: ChartPanelProps) {
     lastLowerRef.current = [...curr];
 
     if (removed.length > 0) {
-      // 仅删除时同步刷新布局
+      // 仅删除时同步刷新布局 (pane 数量变化, 拉伸权重需重新应用)
       syncPaneLayout();
-      requestAnimationFrame(fitTimeScaleDefault);
+      // 2026-08-05：触屏切换不重置主图时间轴缩放 (设置面板入口保持原行为)
+      if (!isTapSwitch) requestAnimationFrame(fitTimeScaleDefault);
     }
 
     // 异步新增：先标记 loading，再逐个串行 addSeries（不闪烁，保持精细路径）
@@ -503,7 +545,7 @@ export default function ChartPanel(props: ChartPanelProps) {
       (async () => {
         for (let i = 0; i < added.length; i++) {
           if (lowerApplyVersionRef.current !== version) return; // 过期链放弃，由新 effect 处理
-          await addLowerPane(added[i], baseIdx + i, props.code, props.interval);
+          await addLowerPane(added[i], baseIdx + i, props.code, props.interval, isTapSwitch);
         }
       })().catch((e) => console.error('新增副图串行失败', e));
     }
@@ -633,6 +675,12 @@ export default function ChartPanel(props: ChartPanelProps) {
       return;
     }
     if (!chartRef.current) return;
+    // 2026-08-05：触屏切换副图时 lowerParams 已切到新指标默认值，但 props.lower 仍是旧指标
+    // (App 对 lower 有 16ms debounce) — 此时重算会误用「旧指标+新参数」重载旧 pane，
+    // 并重建主图叠加指标（loadOverlayIndicator，IKH 还会重置缩放）。
+    // 触屏切换必须跳过 (主图指标/缩放不受影响)；设置面板入口无标志，保持原行为。
+    // 标志由 [lower] effect 统一消费，这里只读不删。
+    if ((window as any).__mobileLowerTap !== undefined) return;
     if (props.upper !== UPPER_TECH.NONE) {
       loadOverlayIndicator(props.upper, props.code, props.interval, props.upperParams);
     }
@@ -967,11 +1015,18 @@ export default function ChartPanel(props: ChartPanelProps) {
     // (主图 BAR 实时更新不受影响)。
     if (wsIndicatorsDisabledRef.current) return;
     if (message.upper?.type === selected.upper) {
-      applyIndicatorDelta(overlaySeriesRef.current, message.upper.result);
-      if (selected.upper === UPPER_TECH.IKH) {
-        ichimokuPrimRef.current?.applyDelta(
-          message.upper.result, barsRef.current, selected.interval <= 2,
-        );
+      // 2026-08-05：触屏切换副图触发的 WS 重订阅, 后端会重推全量 upper —
+      // 抑制这一次（一次性）, 避免叠加指标被历史首点 update 拉回起点重绘;
+      // 设置面板入口不抑制, 保持原行为。实时增量（最新一根）不受影响。
+      if (suppressUpperRef.current) {
+        suppressUpperRef.current = false;
+      } else {
+        applyIndicatorDelta(overlaySeriesRef.current, message.upper.result);
+        if (selected.upper === UPPER_TECH.IKH) {
+          ichimokuPrimRef.current?.applyDelta(
+            message.upper.result, barsRef.current, selected.interval <= 2,
+          );
+        }
       }
     }
     message.lower.forEach((update) => {
@@ -1304,6 +1359,8 @@ export default function ChartPanel(props: ChartPanelProps) {
     hintPaneIndex: number,
     code: string,
     interval: number,
+    // 2026-08-05：触屏切换副图 (关闭→指标) — 跳过主图时间轴缩放重置; 设置面板/全量重建保持原行为。
+    skipZoomReset = false,
   ) => {
     const chart = chartRef.current;
     const paneMap = paneSeriesMapRef.current;
@@ -1337,8 +1394,10 @@ export default function ChartPanel(props: ChartPanelProps) {
       if (allEmpty) setLowerErrorStates((prev) => new Set(prev).add(tech));
       failedLowerRef.current.delete(tech);
       refreshLowerValues();
+      // pane 数量变化, 拉伸权重需重新应用 (触屏切换也保留)
       syncPaneLayout();
-      requestAnimationFrame(fitTimeScaleDefault);
+      // 2026-08-05：触屏切换 (关闭→指标) 不重置主图时间轴缩放
+      if (!skipZoomReset) requestAnimationFrame(fitTimeScaleDefault);
     } catch (e) {
       // 抓全 error（含 axios response/cause），方便排查 USD/CAD 等特定品种失败原因
       console.error(`新增副图指标 ${tech} 失败`, e);
@@ -1382,6 +1441,9 @@ export default function ChartPanel(props: ChartPanelProps) {
     newTech: number,
     code: string,
     interval: number,
+    // 2026-08-05：触屏切换判定由 [lower] effect 统一消费标志后传入 —
+    // 触屏切换不重置主图缩放、不触发主图/叠加指标重绘; 设置面板入口保持原行为。
+    isTapSwitch = false,
   ) => {
     const chart = chartRef.current;
     const paneMap = paneSeriesMapRef.current;
@@ -1394,7 +1456,7 @@ export default function ChartPanel(props: ChartPanelProps) {
     if (paneIndex < 1) {
       // 旧 pane 找不到（状态异常）→ 走原精细增/删路径兜底
       removeLowerPane(oldTech);
-      addLowerPane(newTech, 1, code, interval);
+      addLowerPane(newTech, 1, code, interval, isTapSwitch);
       return;
     }
     try {
@@ -1421,9 +1483,16 @@ export default function ChartPanel(props: ChartPanelProps) {
       setLowerErrorStates((prev) => { const n = new Set(prev); n.delete(oldTech); return n; });
       failedLowerRef.current.delete(newTech);
       refreshLowerValues();
-      syncPaneLayout();
-      updatePaneTops(); // 2026-08-04：pane 结构变化后同步 rects（副图点击区域判断用）
-      requestAnimationFrame(fitTimeScaleDefault);
+      if (isTapSwitch) {
+        // 2026-08-05：触屏切换副图 — 不重置主图时间轴缩放、不重排 pane 布局
+        // (pane 数量不变, 拉伸权重无需重新应用)。WS 重订阅触发的 upper 全量重推
+        // 已由 [lower] effect 同步武装的 suppressUpperRef 抑制, 叠加指标不被拉回起点重绘。
+      } else {
+        // 设置面板入口 — 保持原行为: 同步 pane 布局并重置默认时间轴范围。
+        syncPaneLayout();
+        requestAnimationFrame(fitTimeScaleDefault);
+      }
+      updatePaneTops();
     } catch (e) {
       console.error(`替换副图指标 ${oldTech} → ${newTech} 失败`, e);
       // 失败回滚: 通知父组件取消新指标（旧指标仍显示, 由全量重建兜底收敛状态）
@@ -1717,6 +1786,8 @@ export default function ChartPanel(props: ChartPanelProps) {
       drawingMgrRef.current.handleMouseMove(param.time, mousePrice);
     }
   };
+  // 2026-08-05：每次渲染镜像最新函数 — 挂载期订阅经由 ref 调用, 确保读到最新 props
+  updateInfoOverlayRef.current = updateInfoOverlay;
 
   /** 从鼠标事件参数中提取实际价格 (基于鼠标 Y 坐标, 而非 bar 收盘价)。 */
   const getMousePrice = (param: MouseEventParams<Time>): number | null => {
@@ -1762,6 +1833,8 @@ export default function ChartPanel(props: ChartPanelProps) {
       }
     }
   };
+  // 2026-08-05：每次渲染镜像最新函数 — 挂载期订阅经由 ref 调用, 确保读到最新 t
+  handleChartClickRef.current = handleChartClick;
 
   // ---- 工具提示 ----
   const updateToolHint = (tool: number) => {
