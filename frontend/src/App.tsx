@@ -13,6 +13,17 @@ import { defaultParamsFor } from './constants/indicatorParams';
 // 2026-08-04：移动端默认副图指标 = 成交量 (需求1: 移动端展示一个默认主图 + 一个默认副图)
 const DEFAULT_MOBILE_LOWER = LOWER_TECH.VOLUME;
 
+// 2026-08-05：PC 配置快照 — 从 PC 切到移动端时暂存, 切回 PC 时恢复
+// (PC 用户的图表配置不因临时切换移动端而丢失)
+interface PcSnapshot {
+  chartType: number;
+  upper: number;
+  upperParams: number[];
+  lower: number[];
+  lowerParams: number[];
+  tool: number;
+}
+
 export default function App() {
   // ---- 移动端判定 (提前到状态区之前, lower 初始值依赖它) ----
   const isMobile = useIsMobile();
@@ -147,28 +158,53 @@ export default function App() {
 
   // ---- 移动端判定 (已上移至状态区前, 供 lower 初始值使用) ----
   // 2026-08-04：进入移动端时完全重置图表展示 (需求1):
-  // 主图=蜡烛图、副图=默认成交量、叠加指标=关闭、绘图工具清空; 切回 PC 后同样生效。
+  // 主图=蜡烛图、副图=默认成交量、叠加指标=关闭、绘图工具清空。
   // 首次挂载即移动端时 lower 已由 useState 惰性初始化, 无需再触发 flush (避免与全量加载竞态)。
+  // 2026-08-05：进入移动端**强制**"主图 + 默认成交量副图" (PC 已选副图不再带入);
+  // 从 PC 切来时先快照 PC 配置 (含 pending 未提交的副图变更), 切回 PC 时恢复。
+  const pcSnapshotRef = useRef<PcSnapshot | null>(null);
   const prevIsMobileRef = useRef<boolean | null>(null);
   useEffect(() => {
-    const enteringMobile = isMobile && prevIsMobileRef.current !== true;
-    if (enteringMobile) {
-      setChartType(4); // 默认 Candlesticks
-      setUpper(0);     // 默认无叠加指标
-      setTool(0);      // 默认无绘图工具 (TOOL.NONE)
-      // 2026-08-04：lower 为空时补默认副图 — 覆盖"首次渲染 isMobile 时序偏差"
-      // （页面加载早期 matchMedia 未就绪 → useState 惰性初始化得到 []，之后视口生效 isMobile 翻转，
-      // 但 prevIsMobileRef 首次为 null 会跳过下方 flush）。此时走 pending 通道补 VOLUME,
-      // [lower] effect 在全量加载完成后以精细路径 addLowerPane, 无竞态。
-      if (lower.length === 0) {
-        pendingLowerRef.current = [DEFAULT_MOBILE_LOWER];
-        if (flushLowerTimerRef.current === null) {
-          flushLowerTimerRef.current = window.setTimeout(flushLower, 16);
+    const prev = prevIsMobileRef.current;
+    if (isMobile) {
+      if (prev !== true) {
+        // 进入移动端 (从 PC 切来, 或首次挂载即移动端 prev=null)
+        if (prev === false) {
+          // 从 PC 切来 → 快照当前 PC 配置, 切回时恢复
+          pcSnapshotRef.current = {
+            chartType,
+            upper,
+            upperParams,
+            lower: pendingLowerRef.current ?? lower,
+            lowerParams,
+            tool,
+          };
         }
+        // 强制移动端默认展示 (替代旧的"lower 为空才补" — PC 已选副图不再带入移动端)
+        setChartType(4); // 默认 Candlesticks
+        setUpper(0);     // 默认无叠加指标
+        setUpperParams(defaultParamsFor('upper', 0));
+        pendingLowerRef.current = [DEFAULT_MOBILE_LOWER];
+        flushLower();
+        setLowerParams(defaultParamsFor('lower', DEFAULT_MOBILE_LOWER));
+        setTool(0);      // 默认无绘图工具 (TOOL.NONE)
       }
+    } else if (prev === true && pcSnapshotRef.current) {
+      // 切回 PC → 恢复离开前的配置
+      const s = pcSnapshotRef.current;
+      pcSnapshotRef.current = null;
+      setChartType(s.chartType);
+      setUpper(s.upper);
+      setUpperParams(s.upperParams);
+      pendingLowerRef.current = s.lower;
+      flushLower();
+      setLowerParams(s.lowerParams);
+      setTool(s.tool);
     }
     prevIsMobileRef.current = isMobile;
-  }, [isMobile, flushLower, lower]);
+    // 快照需读取切换瞬间的 chartType/upper/lower 等最新值, 由 isMobile 翻转驱动, 无需逐个依赖
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isMobile, flushLower]);
 
   // ---- 区域 (nation) 配置 ----
   // 后端未提供 nation 接口前, mock 默认 DEFAULT_NATION = 1 (黑白)

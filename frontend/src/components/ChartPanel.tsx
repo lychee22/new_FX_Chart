@@ -173,10 +173,11 @@ const TYPE = { PROSTICKS: 0, BAR: 2, BAR_MODAL: 3, CANDLE: 4, MODAL_LINE: 5, LIN
 
 // 2026-07-21 18:28:13：集中维护手机与桌面的 pane 比例，避免 iframe 改变宽度后布局残留。
 // 2026-08-04：判断标准由宽度改为设备类型 (mobile prop)。
-function applyPaneLayout(chart: IChartApi, isPhoneLayout: boolean): void {
+// 2026-08-05：主图权重统一为 2 (PC/移动端一致) — 单副图时 2:1 (主图占 2/3), 多副图等分余下空间。
+function applyPaneLayout(chart: IChartApi): void {
   const panes = chart.panes();
   if (panes.length === 0) return;
-  panes[0].setStretchFactor(isPhoneLayout && panes.length > 1 ? 2 : 1);
+  panes[0].setStretchFactor(panes.length > 1 ? 2 : 1);
   for (let i = 1; i < panes.length; i++) panes[i].setStretchFactor(1);
 }
 
@@ -196,6 +197,8 @@ export default function ChartPanel(props: ChartPanelProps) {
   // 2026-08-03：镜像 props.fullscreen (横屏全屏), 供初始 effect 内的 resize() 闭包读取最新值
   const fullscreenRef = useRef(props.fullscreen === true);
   fullscreenRef.current = props.fullscreen === true;
+  // 2026-08-05：全屏 hide 是否已执行过 — restore 据此跳过首次挂载 (初始加载由全量路径负责)
+  const panesHiddenForFullscreenRef = useRef(false);
   // 2026-08-04：镜像 props.mobile (设备类型), 供 resize() 等闭包读取最新值
   const mobileRef = useRef(props.mobile === true);
   mobileRef.current = props.mobile === true;
@@ -343,7 +346,7 @@ export default function ChartPanel(props: ChartPanelProps) {
         },
       });
       // 2026-08-04：全屏时容器尺寸变化会触发本 resize, 若此处直接 applyPaneLayout
-      // 会把副图 stretchFactor 重新设回 1, 覆盖全屏压缩 — 统一走 syncPaneLayout (含压缩)。
+      // 会把副图 stretchFactor 重新设回 1, 覆盖全屏隐藏 — 统一走 syncPaneLayout。
       syncPaneLayout();
     };
     const resizeObserver = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(resize);
@@ -601,9 +604,15 @@ export default function ChartPanel(props: ChartPanelProps) {
   }, [props.tool]);
 
   // ---- 横屏全屏: 只显示主图 ----
-  // 2026-08-04：进入/退出全屏即时重排 pane (副图压缩为细缝 / 恢复), 不依赖 resize。
+  // 2026-08-04：进入/退出全屏即时重排 pane, 不依赖 resize。
+  // 2026-08-05：改为真正隐藏/恢复副图 — 移除 series → 空 pane 自动删除 (主图占满 100%,
+  // 无 2px 细缝); 退出全屏从 lowerResultsRef 缓存重建, 零网络请求、无闪烁。
   useEffect(() => {
-    syncPaneLayout();
+    if (props.fullscreen) {
+      hideLowerPanesForFullscreen();
+    } else {
+      void restoreLowerPanesFromCache();
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [props.fullscreen]);
 
@@ -1067,14 +1076,9 @@ export default function ChartPanel(props: ChartPanelProps) {
     if (!chart) return;
     // 2026-07-21 18:28:13：手机主图保持双倍权重，桌面继续使用原有等比例 pane 布局。
     // 2026-08-04：按设备类型判断手机布局 (横屏全屏也按手机布局处理)。
-    applyPaneLayout(chart, mobileRef.current || fullscreenRef.current);
-    // 2026-08-04：横屏全屏只显示主图 — 副图 pane stretchFactor 压到 0 (高度≈2px 细缝),
-    // 主图自动占满整个图表区; 退出全屏时 applyPaneLayout 会把副图统一恢复为 1。
-    // stretchFactor 由 widget 布局按比例分配, resize 后依然保持, 无需在 resize 中重复处理。
-    if (fullscreenRef.current) {
-      const panes = chart.panes();
-      for (let i = 1; i < panes.length; i++) panes[i].setStretchFactor(0);
-    }
+    // 2026-08-05：主图权重统一 2 (PC 2:1); 全屏隐藏副图由 hideLowerPanesForFullscreen
+    // 移除 pane 实现 (库对 pane 高度有硬性 2px 下限, setStretchFactor(0) 只能压成细缝)。
+    applyPaneLayout(chart);
   };
 
   // ---- 加载副图指标 (多选, 每个指标占一个独立 pane) ----
@@ -1182,7 +1186,10 @@ export default function ChartPanel(props: ChartPanelProps) {
       if (selected.length === 0) {
         setLowerLoadingStates(new Set());
         syncPaneLayout();
-        return;
+        // 2026-08-05：不再提前 return —— 让下方对账逻辑兜底"挂载期 lower 已变化但
+        // [lower] effect 因 lowerInitializedRef=false 被跳过"的竞态:
+        // 进入移动端时 App 同步提交默认副图, 而本 effect 闭包捕获的是挂载时的旧 lower,
+        // 变化会被 [lower] effect 吞掉; 走到对账后按 liveSelectionRef 补 addLowerPane。
       }
 
       // 2026-07-31：标记 N 个副图为"加载中"，骨架浮层立即淡入（key=tech）
@@ -1197,10 +1204,11 @@ export default function ChartPanel(props: ChartPanelProps) {
         const paneIndex = nextPane;
         try {
           const result = await indicatorApi.calculate('lower', lower, code, interval, formatIndicatorParams('lower', lower, props.lowerParams));
+          // 2026-08-05：全屏中只缓存不建 series (退出全屏由 restore 统一补建, 不占 paneIndex)
+          lowerResultsRef.current.set(lower, result);
+          if (fullscreenRef.current) continue;
           const { seriesList, allEmpty } = buildPaneSeries(chart, lower, paneIndex, result);
           paneMap.set(lower, seriesList);
-          // 2026-07-29：缓存 result 用于浮层显示"当前值"
-          lowerResultsRef.current.set(lower, result);
           // 2026-07-31：数据就绪 → 从 loading 集合移除，对应骨架淡出
           setLowerLoadingStates((prev) => {
             const next = new Set(prev);
@@ -1308,9 +1316,19 @@ export default function ChartPanel(props: ChartPanelProps) {
       : panesLenNow;
     try {
       const result = await indicatorApi.calculate('lower', tech, code, interval, formatIndicatorParams('lower', tech, props.lowerParams));
+      // 2026-08-05：全屏中只缓存不建 series (副图 pane 已被 hide 移除, 退出全屏由 restore 统一补建)
+      lowerResultsRef.current.set(tech, result);
+      if (fullscreenRef.current) {
+        setLowerLoadingStates((prev) => {
+          const next = new Set(prev);
+          next.delete(tech);
+          return next;
+        });
+        failedLowerRef.current.delete(tech);
+        return;
+      }
       const { seriesList, allEmpty } = buildPaneSeries(chart, tech, paneIndex, result);
       paneMap.set(tech, seriesList);
-      lowerResultsRef.current.set(tech, result);
       setLowerLoadingStates((prev) => {
         const next = new Set(prev);
         next.delete(tech);
@@ -1381,6 +1399,14 @@ export default function ChartPanel(props: ChartPanelProps) {
     }
     try {
       const result = await indicatorApi.calculate('lower', newTech, code, interval);
+      // 2026-08-05：全屏中只缓存不建 series (旧 series 已被 hide 移除, 由退出全屏的 restore 重建)
+      if (fullscreenRef.current) {
+        lowerResultsRef.current.set(newTech, result);
+        lowerResultsRef.current.delete(oldTech);
+        paneMap.delete(oldTech);
+        failedLowerRef.current.delete(newTech);
+        return;
+      }
       // 数据就绪后原地替换: 先 addSeries 新（pane 非空, 不会被自动移除）→ 再 removeSeries 旧
       const { seriesList, allEmpty } = buildPaneSeries(chart, newTech, paneIndex, result);
       for (const s of oldSeriesList) {
@@ -1510,6 +1536,11 @@ export default function ChartPanel(props: ChartPanelProps) {
 
     try {
       const result = await indicatorApi.calculate('lower', tech, code, interval, formatIndicatorParams('lower', tech, props.lowerParams));
+      // 2026-08-05：全屏中只缓存不建 series (series 已被 hide 移除, 由退出全屏的 restore 重建)
+      if (fullscreenRef.current) {
+        lowerResultsRef.current.set(tech, result);
+        return;
+      }
       const isHistogram = tech === LOWER_TECH.VOLUME || tech === LOWER_TECH.VOLP;
       seriesList.forEach((series, i) => {
         const s = result.series[i];
@@ -1540,6 +1571,119 @@ export default function ChartPanel(props: ChartPanelProps) {
         return next;
       });
     }
+  };
+
+  // ---- 2026-08-05：横屏全屏真正隐藏副图 ----
+  // 库对 pane 高度有硬性下限 (Math.max(计算值, 2)), setStretchFactor(0) 只能压成 2px 细缝,
+  // CSS 也无法归零 — 唯一路径是移除 series → 空 pane 自动删除, 主图占满 100%。
+  // hide 只移除 series/pane, 保留 lowerResultsRef 缓存, 退出全屏从缓存重建, 零网络请求、无闪烁。
+  const hideLowerPanesForFullscreen = () => {
+    const chart = chartRef.current;
+    const paneMap = paneSeriesMapRef.current;
+    if (!chart || !paneMap) return;
+    panesHiddenForFullscreenRef.current = true;
+    // 1) 移除所有副图 series (pane 变空自动移除), 防御式 try/catch 与全量清空一致
+    const allPanes = chart.panes();
+    for (let pi = 1; pi < allPanes.length; pi++) {
+      try {
+        for (const s of allPanes[pi].getSeries()) {
+          if (!s) continue;
+          try {
+            chart.removeSeries(s);
+          } catch (_) { /* ignore */ }
+        }
+      } catch (_) { /* ignore */ }
+    }
+    // 2) 兜底: 未被自动移除的 pane 逐个删除 (固定删 index 1, 永不越界)
+    let guard = 0;
+    while (chart.panes().length > 1 && guard++ < 50) {
+      try {
+        chart.removePane(1);
+      } catch (e) {
+        console.warn(`[ChartPanel] 全屏隐藏副图 pane 失败:`, e);
+        break;
+      }
+    }
+    // 3) 清理引用与浮层状态, 保留 lowerResultsRef 缓存 (恢复时重建用)
+    paneMap.clear();
+    setLowerValues(new Map());
+    setLowerLoadingStates(new Set());
+    setPendingFadingOut(new Set());
+    // 4) 只剩主图自动占满, 同步浮层定位
+    syncPaneLayout();
+    updatePaneTops();
+  };
+
+  /** 退出全屏时从缓存恢复副图 — 按 props.lower 顺序重建 pane:
+   *  命中 lowerResultsRef 缓存 → buildPaneSeries 直接重建 (零网络);
+   *  缓存缺失 (全屏期间异步加载才完成) → addLowerPane 正常请求。 */
+  const restoreLowerPanesFromCache = async () => {
+    const chart = chartRef.current;
+    const paneMap = paneSeriesMapRef.current;
+    if (!chart || !paneMap) return;
+    // hide 未执行过 (首次挂载) → 初始加载由全量路径负责, 不掺和
+    if (!panesHiddenForFullscreenRef.current) return;
+    panesHiddenForFullscreenRef.current = false;
+    // 1) 防御性清空 (防全屏期间漏网的 pane), 与 hide 同一逻辑
+    const allPanes = chart.panes();
+    for (let pi = 1; pi < allPanes.length; pi++) {
+      try {
+        for (const s of allPanes[pi].getSeries()) {
+          if (!s) continue;
+          try {
+            chart.removeSeries(s);
+          } catch (_) { /* ignore */ }
+        }
+      } catch (_) { /* ignore */ }
+    }
+    let guard = 0;
+    while (chart.panes().length > 1 && guard++ < 50) {
+      try {
+        chart.removePane(1);
+      } catch (e) {
+        console.warn(`[ChartPanel] 全屏恢复前清空副图 pane 失败:`, e);
+        break;
+      }
+    }
+    paneMap.clear();
+    // 2) 按 props.lower 顺序逐个重建
+    let nextPane = 1;
+    for (const tech of props.lower) {
+      // 恢复期间又进了全屏 → 放弃, 由下一次 hide/restore 处理
+      if (fullscreenRef.current) return;
+      const cached = lowerResultsRef.current.get(tech);
+      if (cached) {
+        // 复用与 addLowerPane 相同的 paneIndex 兜底逻辑 (失败项不占位)
+        const panesLenNow = chart.panes().length;
+        const paneIndex = nextPane >= 1 && nextPane <= panesLenNow ? nextPane : panesLenNow;
+        try {
+          const { seriesList } = buildPaneSeries(chart, tech, paneIndex, cached);
+          paneMap.set(tech, seriesList);
+          setLowerErrorStates((prev) => {
+            if (!prev.has(tech)) return prev;
+            const next = new Set(prev);
+            next.delete(tech);
+            return next;
+          });
+          setLowerLoadingStates((prev) => {
+            if (!prev.has(tech)) return prev;
+            const next = new Set(prev);
+            next.delete(tech);
+            return next;
+          });
+          nextPane++;
+        } catch (e) {
+          console.warn(`[ChartPanel] 全屏恢复副图 ${tech} 失败:`, e);
+        }
+      } else {
+        // 缓存缺失 → 走正常加载 (内部已有全屏守卫)
+        await addLowerPane(tech, nextPane, props.code, props.interval);
+        nextPane++;
+      }
+    }
+    refreshLowerValues();
+    syncPaneLayout();
+    updatePaneTops();
   };
 
   // ---- 十字光标读数 ----
@@ -1783,7 +1927,7 @@ export default function ChartPanel(props: ChartPanelProps) {
     if (Math.hypot(e.clientX - start.x, e.clientY - start.y) > LOWER_TAP_THRESHOLD) return;
     // 绘图工具激活时不切换 (画线交互优先)
     if (props.tool !== TOOL.NONE) return;
-    // 全屏时副图被压缩到 2px, 点击应走"单击退出全屏"
+    // 2026-08-05：全屏时副图 pane 已被隐藏 (无副图可点), 点击应走"单击退出全屏"
     if (fullscreenRef.current) return;
     if (!props.onCycleLower) return;
     const containerRect = containerRef.current?.getBoundingClientRect();
