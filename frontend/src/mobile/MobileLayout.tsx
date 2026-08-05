@@ -102,6 +102,10 @@ interface MobileLayoutProps {
   /** 2026-07-29：删除指定副图 */
   onRemoveLower: (tech: number) => void;
   registerExport: (fn: () => void) => void;
+  /** 2026-08-05：手动刷新入口 (顶栏刷新按钮) */
+  onRefresh: () => void;
+  /** 2026-08-05：注册 ChartPanel 的 refreshAllData (刷新按钮与 WS 重连重拉共用) */
+  registerRefresh: (fn: () => void) => void;
   /** 2026-07-30：撤销最后一个绘图 */
   onUndo: () => void;
   /** 2026-07-30：是否有可撤销对象 */
@@ -242,21 +246,52 @@ export default function MobileLayout(props: MobileLayoutProps) {
   // 串行化进入流程, 防止 requestFullscreen 在途时重复进入
   const landscapeBusyRef = useRef(false);
 
-  // 进入横屏: 先 await 全屏完成, 再尽力 orientation.lock('landscape')
-  // (规范要求 lock 时文档已在全屏; 顶层页面 Android Chrome 才会真正旋转, 其余静默降级)
+  // 2026-08-05：CSS 旋转兜底状态 — 进入横屏时**无脑**启用, 给 .mobile-shell 加 .force-landscape,
+  // 让 .mobile-chart-wrap 通过 transform 旋转 90° 在竖屏设备上铺出横屏区域。
+  // 状态而非 ref: 触发 CSS className 重渲染, 类比 isChartFullscreen。
+  const [forceLandscape, setForceLandscape] = useState(false);
+
+  // 2026-08-05：进入横屏 — 不再等待 lock 结果, 直接启用 CSS 旋转兜底。
+  // 真机调研 (vivo 原生 / 夸克 / 部分 WebView) 发现: lock 调用不抛错也不旋转,
+  // 且 screen.orientation.type 不会更新, 200ms 探测无法判别成功, 兜底永远进不去。
+  // 行业标准: lock 优先 + CSS rotate 兜底必须同时做。本实现把 CSS 旋转当作常态, lock 当作锦上添花。
   const enterLandscape = useCallback(async () => {
     if (landscapeBusyRef.current) return;
     const el = chartWrapRef.current;
     if (!el) return;
     landscapeBusyRef.current = true;
+    console.log('[landscape-debug] enterLandscape called', {
+      isFs: isFullscreenElement(),
+      oriType: (screen as { orientation?: { type?: string } }).orientation?.type,
+    });
     try {
+      // 1) requestFullscreen — best effort, 失败也走 CSS 旋转
       if (!isFullscreenElement()) {
-        try { await requestElementFullscreen(el); } catch { /* 用户拒绝 / 不支持 / iframe 拦截 */ }
+        try {
+          await requestElementFullscreen(el);
+          console.log('[landscape-debug] requestFullscreen resolved');
+        } catch (e) {
+          console.log('[landscape-debug] requestFullscreen rejected', e);
+        }
       }
+      // 2) orientation.lock — fire-and-forget, 静默失败
       try {
-        const ori = (screen as { orientation?: { lock?: (o: string) => Promise<void> } }).orientation;
-        await ori?.lock?.('landscape');
-      } catch { /* 跨源 iframe / iOS Safari: 静默退化为竖屏全屏 */ }
+        const ori = (screen as { orientation?: { lock?: (o: string) => Promise<void>; type?: string } }).orientation;
+        const p = ori?.lock?.('landscape');
+        if (p && typeof (p as Promise<void>).then === 'function') {
+          (p as Promise<void>).then(
+            () => console.log('[landscape-debug] orientation.lock resolved, type=', ori?.type),
+            (e: unknown) => console.log('[landscape-debug] orientation.lock rejected', e),
+          );
+        } else {
+          console.log('[landscape-debug] orientation.lock API not available');
+        }
+      } catch (e) {
+        console.log('[landscape-debug] orientation.lock threw', e);
+      }
+      // 3) 立即启用 CSS 旋转兜底 — 不等待 lock, 视觉横屏必须可见
+      setForceLandscape(true);
+      console.log('[landscape-debug] forceLandscape = true (CSS rotation enabled)');
     } finally {
       landscapeBusyRef.current = false;
     }
@@ -271,6 +306,9 @@ export default function MobileLayout(props: MobileLayoutProps) {
     } catch { /* ignore */ }
     // 规范: 退出全屏时 lock 自动释放; 防御性调用 unlock (未锁定时为 no-op)
     try { (screen as { orientation?: { unlock?: () => void } }).orientation?.unlock?.(); } catch { /* ignore */ }
+    // 退出全屏时同时清除 CSS 旋转兜底
+    setForceLandscape(false);
+    console.log('[landscape-debug] exitLandscape -> forceLandscape = false');
   }, []);
 
   // 顶部栏全屏按钮仍走此处
@@ -281,6 +319,7 @@ export default function MobileLayout(props: MobileLayoutProps) {
 
   // 2026-08-03：物理旋转自动进入/退出横屏 — 手动旋转为横屏时自动 requestFullscreen,
   // 转回竖屏自动退出。跨源 iframe / iOS 无 orientation API 时不派发事件 → 静默降级为仅按钮+轻点入口。
+  // 2026-08-05：若用户后续手动旋转到横屏使 native 成功, 关闭 CSS 旋转兜底, 避免双重旋转错位。
   useEffect(() => {
     const isLandscapeOrientation = () => {
       const ori = (screen as { orientation?: { type?: string } }).orientation?.type;
@@ -290,6 +329,9 @@ export default function MobileLayout(props: MobileLayoutProps) {
     const onOrientationChange = () => {
       // 旋转为横屏且当前非全屏 → 进入; 旋转为竖屏且在全屏 → 退出
       if (isLandscapeOrientation()) {
+        // 物理上已是横屏 → native lock 实际生效, 关闭 CSS 兜底避免视觉双重旋转
+        setForceLandscape(false);
+        console.log('[landscape-debug] physical landscape detected, forceLandscape = false');
         if (!isFullscreenElement()) void enterLandscape();
       } else {
         if (isFullscreenElement()) void exitLandscape();
@@ -308,6 +350,14 @@ export default function MobileLayout(props: MobileLayoutProps) {
     };
   }, [enterLandscape, exitLandscape]);
 
+  // 2026-08-05：图表内触屏切换副图入口的专用通道 — 设置 __mobileLowerTap 标志,
+  // ChartPanel 据此区分入口: 触屏切换不重置主图缩放/不重绘叠加指标; 设置面板入口不受影响。
+  const tapReplaceLower = useCallback((v: number) => {
+    (window as any).__mobileLowerTap = Date.now();
+    props.onLowerChange(v);
+    props.onLowerParamsChange(defaultParamsFor('lower', v));
+  }, [props.onLowerChange, props.onLowerParamsChange]);
+
   // 2026-08-04：点击副图循环切换副图指标 — 当前 lower[0]（无副图视为 NONE）→ 列表下一个 → replaceLower。
   // 移动端最多一个副图, 直接走 props.onLowerChange（App 的 replaceLower 替换语义）。
   // 循环切换视为未自定义参数 — 同步重置为该指标默认参数。
@@ -315,9 +365,8 @@ export default function MobileLayout(props: MobileLayoutProps) {
     const current = props.lower[0] ?? LOWER_TECH.NONE;
     const idx = LOWER_CYCLE.indexOf(current);
     const next = LOWER_CYCLE[(idx + 1) % LOWER_CYCLE.length];
-    props.onLowerChange(next);
-    props.onLowerParamsChange(defaultParamsFor('lower', next));
-  }, [props.lower, props.onLowerChange, props.onLowerParamsChange]);
+    tapReplaceLower(next);
+  }, [props.lower, tapReplaceLower]);
 
   // 2026-08-04：点击副图描述条（指标名称条）→ 打开副图指标选择列表
   const [lowerSheetOpen, setLowerSheetOpen] = useState(false);
@@ -336,14 +385,15 @@ export default function MobileLayout(props: MobileLayoutProps) {
   const tapStartRef = useRef<{ x: number; y: number; pointerId: number } | null>(null);
 
   const onChartWrapPointerDown = (e: ReactPointerEvent<HTMLDivElement>) => {
-    if (e.pointerType === 'mouse' && e.button !== 0) return; // 仅左键
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
     const target = e.target as HTMLElement;
     // 忽略落在交互子元素 / 浮层 / 退出按钮上的按下
-    if (target.closest(
+    const hit = target.closest(
       '.info-overlay, .tools-hint, .pane-title-overlay, .pane-skeleton-overlay, ' +
       '.lw-textbox, .lw-textbox__content, .mobile-landscape-exit, button, a, input, [role="option"], ' +
       '.ant-drawer-mask',  // 2026-08-04：点击 Drawer 遮罩关闭时误触轻点进入全屏
-    )) return;
+    );
+    if (hit) return;
     tapStartRef.current = { x: e.clientX, y: e.clientY, pointerId: e.pointerId };
   };
 
@@ -357,7 +407,8 @@ export default function MobileLayout(props: MobileLayoutProps) {
 
     // 松开时目标也做一次过滤 (手指可能滑到子元素上)
     const target = e.target as HTMLElement;
-    if (target.closest('.mobile-landscape-exit, button, a, .info-overlay, .tools-hint, .lw-textbox')) return;
+    const upHit = target.closest('.mobile-landscape-exit, button, a, .info-overlay, .tools-hint, .lw-textbox');
+    if (upHit) return;
 
     // 2026-08-04：全屏时轻点即退出横屏 (需求: 点击进入全屏后, 再次点击退出)。
     // 位移超阈值(拖动/平移图表)已在上面拦截; 退出后下次轻点又会进入, 交替切换。
@@ -376,7 +427,12 @@ export default function MobileLayout(props: MobileLayoutProps) {
   const onChartWrapPointerCancel = () => { tapStartRef.current = null; };
 
   return (
-    <MobileShell className={isChartFullscreen ? 'is-chart-fullscreen' : ''}>
+    <MobileShell
+      className={[
+        isChartFullscreen ? 'is-chart-fullscreen' : '',
+        forceLandscape ? 'force-landscape' : '',
+      ].filter(Boolean).join(' ')}
+    >
       {!isChartFullscreen && (
         <MobileTopBar
           instrument={currentInstrument}
@@ -384,6 +440,7 @@ export default function MobileLayout(props: MobileLayoutProps) {
           onFullscreen={toggleFullscreen}
           onSearch={() => setCodeSheetOpen(true)}
           onTitleClick={() => setCodeSheetOpen(true)}
+          onRefresh={props.onRefresh}
         />
       )}
 
@@ -392,39 +449,20 @@ export default function MobileLayout(props: MobileLayoutProps) {
         onChange={setTab}
         detailsContent={
           <>
-            {/* 工具栏: 周期 / 类型 / 设置齿轮 (仅非全屏时显示) */}
+            {/* 工具栏: 周期 / 类型 / 设置(仅非全屏时显示) */}
             {!isChartFullscreen && (
               <div className="mobile-toolbar">
                 <Button onClick={() => setIntervalSheetOpen(true)}>
                   {currentIntervalLabel} <SwapOutlined />
                 </Button>
                 <Button onClick={() => setTypeSheetOpen(true)}>{currentTypeLabel}</Button>
-                {/* 2026-08-03：竖屏也提供工具入口 — 否则画线必须先进横屏才能选工具,
-                    不符合"基本使用"。与横屏工具栏同一工具 sheet。 */}
-                {/* <Button onClick={() => setToolSheetOpen(true)}>
-                  {toolOptions.find((o) => o.value === props.tool)?.label ?? t('Tools')}
-                </Button> */}
-                <Tooltip title="設置">
-                  <Button
-                    shape="circle"
-                    icon={<SettingOutlined />}
-                    onClick={() => setSettingsOpen(true)}
-                  />
-                </Tooltip>
-                {/* 2026-08-03：工具激活时显示"取消"按钮 (触摸端右键取消的替代) */}
-                {/* {props.tool !== TOOL.NONE && (
-                  <Button
-                    className="mobile-cancel-draw"
-                    onClick={() => window.dispatchEvent(new CustomEvent('chart:cancel-drawing'))}
-                  >
-                    {t('CancelDraw')}
-                  </Button>
-                )} */}
+                <Button
+                  shape="circle"
+                  icon={<SettingOutlined />}
+                  onClick={() => setSettingsOpen(true)}
+                />
               </div>
             )}
-
-            {/* 2026-08-03 注释保留：全屏工具栏已移入 chartWrap 内做悬浮层 (见下方) —
-                TopBar/Tabs/免责声明仍隐藏。 */}
 
             {/* 图表区: 与 PC 共用, 全屏时被系统 requestFullscreen 接管;
                 轻点图表空白处进入横屏观看 (pointer 位移阈值 + 工具/浮层守卫) */}
@@ -454,6 +492,7 @@ export default function MobileLayout(props: MobileLayoutProps) {
                 onReorderLower={props.onReorderLower}
                 onRemoveLower={props.onRemoveLower}
                 registerExport={props.registerExport}
+                registerRefresh={props.registerRefresh}
                 onUndo={props.onUndo}
                 canUndo={props.canUndo}
                 registerCanUndo={props.registerCanUndo}
@@ -488,6 +527,14 @@ export default function MobileLayout(props: MobileLayoutProps) {
                 >
                   <FullscreenExitOutlined />
                 </button>
+              )}
+              {/* 2026-08-05：横屏全屏状态提示 — 全屏期间常驻显示, 让用户明确当前是横屏模式
+                  以及如何退出 (点击图表 / 点击此提示 / 点击退出按钮)。
+                  即使 CSS 旋转兜底失败, 这条文字提示也是用户反馈的兜底。 */}
+              {isChartFullscreen && (
+                <div className="mobile-rotate-hint" role="status" aria-live="polite">
+                  {t('RotateDeviceHint')}
+                </div>
               )}
             </div>
 
@@ -537,17 +584,15 @@ export default function MobileLayout(props: MobileLayoutProps) {
         getContainer={() => chartWrapRef.current ?? document.body}
       />
 
-      {/* 2026-08-04：副图指标选择列表 — 点击副图描述条(指标名称条)弹出, 点选即切换 */}
+      {/* 2026-08-04：副图指标选择列表 — 点击副图描述条(指标名称条)弹出, 点选即切换
+          (2026-08-05：触屏入口走 tapReplaceLower, 不影响主图缩放/叠加指标) */}
       <MobileDropdownSheet
         title="副圖指標"
         open={lowerSheetOpen}
         onClose={() => setLowerSheetOpen(false)}
         options={lowerSelectOptions}
         selected={props.lower[0] ?? LOWER_TECH.NONE}
-        onSelect={(v) => {
-          props.onLowerChange(v);
-          props.onLowerParamsChange(defaultParamsFor('lower', v));
-        }}
+        onSelect={tapReplaceLower}
         getContainer={() => chartWrapRef.current ?? document.body}
       />
 
