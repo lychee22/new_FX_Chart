@@ -264,6 +264,8 @@ body {
   pointer-events: none;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
 }
+
+/* 触屏路径改用库原生 vertLine/horzLine (2026-08-05 移除自绘 .crosshair-x/.crosshair-y) */
 /* 2026-07-24：涨跌色由 React 通过 CSS 变量 --io-up / --io-down 注入 (按后端 nation 切换) */
 .info-overlay .up { color: var(--io-up, #000000); }
 .info-overlay .down { color: var(--io-down, #000000); }
@@ -732,6 +734,67 @@ body {
   /* 全屏时工具提示右移, 避免与退出按钮重叠 (tools-hint 平时在右上角) */
   .mobile-shell.is-chart-fullscreen .tools-hint {
     right: calc(env(safe-area-inset-right) + 48px);
+  }
+
+  /* 2026-08-05：native orientation.lock 失败时的 CSS 旋转兜底
+     —— JS 200ms 探测发现物理朝向仍为 portrait, 给 .mobile-shell 加 .force-landscape,
+        在竖屏设备上通过 transform 把 .mobile-chart-wrap 整体旋转 90° 铺出横屏图表区域。
+
+     关键点:
+       - 仅与 .is-chart-fullscreen 同时存在才生效 → 全屏状态是前置条件。
+       - getBoundingClientRect 在 transform 旋转后自动返回视觉矩形, 因此图表交互
+         (坐标换算 / 文字框拖动 / 绘图 / 十字光标) 全部无需改业务代码。
+       - 旋转 90° 后视觉上"右"对应物理"上", "左"对应物理"下",
+         安全区方向需要重新映射: top→right, left→bottom。 */
+  .mobile-shell.is-chart-fullscreen.force-landscape .mobile-chart-wrap {
+    position: fixed;
+    top: 0;
+    left: 100vw;                 /* 旋转后左偏一屏宽, 让盒子回到屏幕内 */
+    width: 100vh;                /* 视觉宽度 = 设备高度 */
+    height: 100vw;               /* 视觉高度 = 设备宽度 */
+    transform: rotate(90deg);
+    transform-origin: 0 0;
+    z-index: 25;                 /* 高于 body 正常流 */
+    background: #fff;
+  }
+  /* 旋转后顶部对应设备右边缘, 退出按钮沿用 calc(env(safe-area-inset-right) + 10px) 作为视觉顶部 */
+  .mobile-shell.is-chart-fullscreen.force-landscape .mobile-landscape-exit {
+    top: calc(env(safe-area-inset-right) + 10px);
+    right: auto;
+    left: calc(env(safe-area-inset-bottom) + 10px);
+  }
+  /* 工具栏视觉顶部同样为 right inset */
+  .mobile-shell.is-chart-fullscreen.force-landscape .mobile-landscape-tools {
+    top: calc(env(safe-area-inset-right) + 8px);
+    left: auto;
+    right: calc(env(safe-area-inset-bottom) + 56px);
+  }
+  /* tools-hint 全屏偏移重新按旋转后的视觉右边缘计算 */
+  .mobile-shell.is-chart-fullscreen.force-landscape .tools-hint {
+    right: calc(env(safe-area-inset-bottom) + 48px);
+  }
+
+  /* 2026-08-05：native lock 失败时的"请旋转设备"文字提示。
+     平时定位在图表区底部居中; CSS 旋转生效后被 .force-landscape 隐藏。
+     z-index 高于图表浮层 (10/11) 但低于退出按钮 (30)。 */
+  .mobile-rotate-hint {
+    position: absolute;
+    left: 50%;
+    bottom: calc(env(safe-area-inset-bottom) + 24px);
+    transform: translateX(-50%);
+    z-index: 20;
+    padding: 8px 16px;
+    border-radius: 18px;
+    background: rgba(32, 32, 32, 0.82);
+    color: #fff;
+    font-size: 13px;
+    line-height: 1.3;
+    pointer-events: none;
+    animation: rotate-hint-fade 0.3s ease-out;
+  }
+  @keyframes rotate-hint-fade {
+    from { opacity: 0; transform: translate(-50%, 8px); }
+    to   { opacity: 1; transform: translate(-50%, 0); }
   }
 
   /* 免责声明 */
