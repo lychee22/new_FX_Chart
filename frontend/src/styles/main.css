@@ -383,6 +383,39 @@ body {
   font-size: 14px;
 }
 
+/* ===== 2026-08-06：首屏 loading / 刷新转圈 ===== */
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* PC 工具栏刷新按钮 — 刷新期间旋转转圈 (不影响图表展示) */
+.icon-btn.spinning {
+  animation: spin 1s linear infinite;
+}
+
+/* 首屏图表数据加载覆盖层 — 覆盖整个图表区, 半透明白底 */
+.chart-loading-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  background: rgba(255, 255, 255, 0.92);
+}
+.chart-loading-text {
+  color: #8895a6;
+  font-size: 14px;
+}
+
+/* 移动端顶栏刷新图标 — antd icon 默认 inline, 需 inline-block 才能 transform 旋转 */
+.mobile-topbar-actions .anticon.spin {
+  display: inline-block;
+  animation: spin 1s linear infinite;
+}
+
 /* 2026-07-21 18:28:13：为 iframe 内的 iOS/Android 竖屏提供独立滚动、触摸尺寸和安全区域适配。 */
 @media (pointer: coarse) {
   html,

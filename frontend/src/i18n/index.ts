@@ -40,6 +40,8 @@ export const STRINGS = {
     // 2026-08-05：手动刷新 / 数据加载失败提示
     Refresh: 'Refresh',
     LoadFailed: 'Failed to load data',
+    // 2026-08-06：首屏加载中提示
+    Loading: 'Loading',
     // 2026-07-31：单类工具数量上限提示（除画线外每类最多 5 个）
     LimitReached: 'Reached the limit (max 5). Please clear existing drawings first.',
     RightClickCancel: 'Right-click to cancel',
@@ -82,6 +84,8 @@ export const STRINGS = {
     // 2026-08-05：手動刷新 / 數據加載失敗提示
     Refresh: '重新整理',
     LoadFailed: '數據加載失敗',
+    // 2026-08-06：首屏加載中提示
+    Loading: '載入中',
     // 2026-07-31：單類工具數量上限提示 (除畫線外每類最多 5 個)
     LimitReached: '已達上限 (最多 5 個),請先清除已繪內容。',
     RightClickCancel: '按右鍵取消',
@@ -122,6 +126,8 @@ export const STRINGS = {
     // 2026-08-05：手动刷新 / 数据加载失败提示
     Refresh: '刷新',
     LoadFailed: '数据加载失败',
+    // 2026-08-06：首屏加载中提示
+    Loading: '加载中',
     // 2026-07-31：单类工具数量上限提示（除画线外每类最多 5 个）
     LimitReached: '已达上限 (最多 5 个),请先清除已绘内容。',
     RightClickCancel: '右键取消',

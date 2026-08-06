@@ -13,7 +13,7 @@ import {
   type Time,
   type MouseEventParams,
 } from 'lightweight-charts';
-import { Button, message } from 'antd';
+import { Button, message, Spin } from 'antd';
 import { ShrinkOutlined, ArrowsAltOutlined, RedoOutlined, DeleteOutlined, CaretUpOutlined} from '@ant-design/icons';
 import { marketApi, indicatorApi } from '../api/client';
 import type {
@@ -167,7 +167,14 @@ interface ChartPanelProps {
   mobile?: boolean;
   /** 2026-08-04：移动端点击副图 pane → 循环切换副图指标 (由 MobileLayout 提供实现) */
   onCycleLower?: () => void;
+  /** 2026-08-06：刷新进行状态上报 (手动刷新/WS 重连重拉期间 true) — 驱动工具栏/顶栏刷新按钮转圈 */
+  onRefreshingChange?: (refreshing: boolean) => void;
 }
+
+// 2026-08-06：首屏 loading 最小时长 — 原为 3s 演示用, 效果确认后归零 (仅首次加载, 切换品种不显示)。
+// 需要重新演示时可改大; 保留该结构以便将来统一调整。
+const INITIAL_LOADING_MIN_MS = 0;
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
 // 图表类型常量 (与 types/index.ts 的 CHART_TYPE 对齐)
 // 2026-07-31：新增 MAIN_VOLUME = 8，主图叠加成交量直方图 (Candle + Volume)
@@ -233,9 +240,16 @@ export default function ChartPanel(props: ChartPanelProps) {
   // 2026-08-05：刷新入口镜像 — 挂载期订阅的 WS 重连回调与工具栏刷新按钮经由 ref 调用,
   // 确保每次都执行最新闭包 (props.code/interval/params 随渲染更新)。
   const refreshAllRef = useRef<(() => void) | null>(null);
+  // 2026-08-06：首次加载是否已完成 — 仅首次显示全屏 loading, 切换品种时不再遮挡旧图
+  const initialLoadedRef = useRef(false);
+  const [initialLoading, setInitialLoading] = useState(true);
   const [info, setInfo] = useState<string>('');
   // 2026-08-05：3 秒自动隐藏定时器 — 触屏松开/离开后自动调 clearCrosshairPosition 隐藏库光标
   const hideTimerRef = useRef<number | null>(null);
+  // 2026-08-06：触屏十字线 rAF 帧节流 — 长按激活后按帧合并移动更新,
+  // 避免每帧多次 pointermove 同步转坐标 + setCrosshairPosition 造成位移卡顿
+  const crosshairRafRef = useRef<number | null>(null);
+  const lastTouchPointRef = useRef<{ clientX: number; clientY: number } | null>(null);
   const [toolHint, setToolHint] = useState<string>('');
   // 2026-07-27：文字框 React state — 与 DrawingManager 双向同步，由订阅回调驱动
   // 2026-08-05：改存 {box, index}（index 为 DrawingManager.objects 下标），
@@ -424,8 +438,14 @@ export default function ChartPanel(props: ChartPanelProps) {
     let cancelled = false;
     (async () => {
       if (!chartRef.current) return;
+      // 2026-08-06：仅首次加载显示全屏 loading — 与 getBars 并行等待 INITIAL_LOADING_MIN_MS,
+      // 让 loading 至少可见一段演示时长 (接口通常更快, 不加会一闪而过)。
+      const isFirstLoad = !initialLoadedRef.current;
       try {
-        const bars = await marketApi.getBars(props.code, props.interval, 300, false);
+        const bars = await Promise.all([
+          marketApi.getBars(props.code, props.interval, 300, false),
+          isFirstLoad ? sleep(INITIAL_LOADING_MIN_MS) : Promise.resolve(),
+        ]).then(([bars]) => bars);
         if (cancelled) return;
         barsRef.current = bars;
         renderMainSeries(bars, props.chartType, props.decimals);
@@ -2124,17 +2144,66 @@ export default function ChartPanel(props: ChartPanelProps) {
   // 记录 pointer 起点, pointerup 时区分"轻点 / 拖动"；命中副图 pane 区域且无绘图工具激活时,
   // stopPropagation 阻止 MobileLayout 的"轻点进入全屏", 并触发 onCycleLower。
   const lowerTapStartRef = useRef<{ x: number; y: number; pointerId: number } | null>(null);
+  const longPressTimerRef = useRef<number | null>(null);
+  const longPressActiveRef = useRef(false);
+  const LONG_PRESS_MS = 600;
   const LOWER_TAP_THRESHOLD = 8;
 
+  const cancelLongPress = () => {
+    if (longPressTimerRef.current !== null) {
+      window.clearTimeout(longPressTimerRef.current);
+      longPressTimerRef.current = null;
+    }
+  };
+
   const onChartPointerDown = (e: ReactPointerEvent<HTMLDivElement>) => {
-    onChartPointerMove(e);
     lowerTapStartRef.current = { x: e.clientX, y: e.clientY, pointerId: e.pointerId };
+    lastTouchPointRef.current = null;
+    longPressActiveRef.current = false;
+    cancelLongPress();
+
+    // 鼠标仍完全沿用 lightweight-charts 原生路径；绘图工具需要立即接收触摸位置。
+    if (e.pointerType === 'mouse' || props.tool !== TOOL.NONE) {
+      onChartPointerMove(e);
+      return;
+    }
+
+    const containerRect = containerRef.current?.getBoundingClientRect();
+    const mainRect = paneRects[0];
+    if (!containerRect || !mainRect) return;
+    const localY = e.clientY - containerRect.top;
+    const inMainPane = localY >= mainRect.top && localY <= mainRect.top + mainRect.height;
+    if (!inMainPane) return;
+
+    // 短按保留给 MobileLayout 进入全屏；持续按住 0.6 秒后才显示十字线。
+    const { clientX, clientY, pointerId } = e;
+    longPressTimerRef.current = window.setTimeout(() => {
+      const start = lowerTapStartRef.current;
+      longPressTimerRef.current = null;
+      if (!start || start.pointerId !== pointerId) return;
+      longPressActiveRef.current = true;
+      // 用 600ms 内最新手指位置而非按下瞬间坐标, 消除轻微位移造成的十字线偏移
+      const latest = lastTouchPointRef.current;
+      lastTouchPointRef.current = { clientX: latest?.clientX ?? clientX, clientY: latest?.clientY ?? clientY };
+      cancelHide();
+      renderCrosshairFromLastPoint();
+    }, LONG_PRESS_MS);
   };
 
   const onChartPointerUp = (e: ReactPointerEvent<HTMLDivElement>) => {
+    cancelLongPress();
+    const wasLongPress = longPressActiveRef.current;
+    longPressActiveRef.current = false;
+    lastTouchPointRef.current = null;
+    cancelCrosshairFrame();
     const start = lowerTapStartRef.current;
     lowerTapStartRef.current = null;
     if (!start || start.pointerId !== e.pointerId) return;
+    // 长按只用于十字线，阻止本次松手冒泡成 MobileLayout 的轻点全屏。
+    if (wasLongPress) {
+      e.stopPropagation();
+      return;
+    }
     // 位移超阈值 = 拖动/平移, 不切换
     if (Math.hypot(e.clientX - start.x, e.clientY - start.y) > LOWER_TAP_THRESHOLD) return;
     // 绘图工具激活时不切换 (画线交互优先)
