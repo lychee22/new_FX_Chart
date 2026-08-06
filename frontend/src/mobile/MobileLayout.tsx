@@ -104,6 +104,10 @@ interface MobileLayoutProps {
   registerExport: (fn: () => void) => void;
   /** 2026-08-05：手动刷新入口 (顶栏刷新按钮) */
   onRefresh: () => void;
+  /** 2026-08-06：刷新进行中 — 顶栏刷新图标旋转转圈 (不影响界面展示) */
+  refreshing: boolean;
+  /** 2026-08-06：ChartPanel 刷新状态上报 — 转发给内部 ChartPanel, 由 App 驱动按钮转圈 */
+  onRefreshingChange?: (refreshing: boolean) => void;
   /** 2026-08-05：注册 ChartPanel 的 refreshAllData (刷新按钮与 WS 重连重拉共用) */
   registerRefresh: (fn: () => void) => void;
   /** 2026-07-30：撤销最后一个绘图 */
@@ -140,19 +144,23 @@ export default function MobileLayout(props: MobileLayoutProps) {
   const [toolSheetOpen, setToolSheetOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
 
-  // 设置面板草稿
+  // 设置面板当前值 — 由 props 实时派生 (不再用 useState 快照):
+  // 副图经点击循环切换 / 副图指标列表等外部入口改变后, 面板打开时下拉框与副图展示保持一致。
   // 2026-08-04：下层无副图时默认显示"關閉" (LOWER_TECH.NONE), 上层无叠加时显示"主圖" (UPPER_TECH.NONE);
   // 参数初始 = App 传入 (未传时按当前指标默认值)
-  const [settingsValue, setSettingsValue] = useState<MobileSettingsValue>({
-    upper: props.upper || UPPER_TECH.NONE,
-    upperParams: props.upperParams?.length
-      ? [...props.upperParams]
-      : defaultParamsFor('upper', props.upper || UPPER_TECH.NONE),
-    lower: props.lower[0] ?? LOWER_TECH.NONE,
-    lowerParams: props.lowerParams?.length
-      ? [...props.lowerParams]
-      : defaultParamsFor('lower', props.lower[0] ?? LOWER_TECH.NONE),
-  });
+  const settingsValue: MobileSettingsValue = useMemo(
+    () => ({
+      upper: props.upper || UPPER_TECH.NONE,
+      upperParams: props.upperParams?.length
+        ? [...props.upperParams]
+        : defaultParamsFor('upper', props.upper || UPPER_TECH.NONE),
+      lower: props.lower[0] ?? LOWER_TECH.NONE,
+      lowerParams: props.lowerParams?.length
+        ? [...props.lowerParams]
+        : defaultParamsFor('lower', props.lower[0] ?? LOWER_TECH.NONE),
+    }),
+    [props.upper, props.upperParams, props.lower, props.lowerParams],
+  );
 
   // 选项数据
   const codeOptions: DropdownOption<string>[] = useMemo(
@@ -399,8 +407,8 @@ export default function MobileLayout(props: MobileLayoutProps) {
 
   const onChartWrapPointerUp = (e: ReactPointerEvent<HTMLDivElement>) => {
     const start = tapStartRef.current;
-    if (!start || start.pointerId !== e.pointerId) return;
     tapStartRef.current = null;
+    if (!start || start.pointerId !== e.pointerId) return;
 
     // 位移超阈值 → 是拖动/平移 (图表左右滑动查看历史 K 线)
     if (Math.hypot(e.clientX - start.x, e.clientY - start.y) > TAP_MOVE_THRESHOLD) return;
@@ -441,6 +449,7 @@ export default function MobileLayout(props: MobileLayoutProps) {
           onSearch={() => setCodeSheetOpen(true)}
           onTitleClick={() => setCodeSheetOpen(true)}
           onRefresh={props.onRefresh}
+          refreshing={props.refreshing}
         />
       )}
 
@@ -493,6 +502,7 @@ export default function MobileLayout(props: MobileLayoutProps) {
                 onRemoveLower={props.onRemoveLower}
                 registerExport={props.registerExport}
                 registerRefresh={props.registerRefresh}
+                onRefreshingChange={props.onRefreshingChange}
                 onUndo={props.onUndo}
                 canUndo={props.canUndo}
                 registerCanUndo={props.registerCanUndo}
@@ -603,7 +613,6 @@ export default function MobileLayout(props: MobileLayoutProps) {
         value={settingsValue}
         getContainer={() => chartWrapRef.current ?? document.body}
         onApply={(next) => {
-          setSettingsValue(next);
           props.onUpperChange(next.upper);
           props.onUpperParamsChange(next.upperParams);
           props.onLowerChange(next.lower);

@@ -5,7 +5,7 @@
 
 import { Drawer, Select, InputNumber, Button, Divider } from 'antd';
 import { CloseOutlined } from '@ant-design/icons';
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useI18n } from '../i18n';
 import { UPPER_TECH, LOWER_TECH } from '../types';
 import {
@@ -69,6 +69,14 @@ const LOWER_SLOT_LABELS = ['快', '慢', '訊號'];
 export function MobileSettingsPanel({ open, onClose, value, onApply, getContainer }: MobileSettingsPanelProps) {
   const { t } = useI18n();
   const [draft, setDraft] = useState<MobileSettingsValue>(value);
+
+  // 2026-08-06：每次打开面板时从当前已套用值重置草稿 — 副图经点击循环切换等外部入口
+  // 改变后, 面板打开时下拉框与副图展示保持一致 (不再停留在首次挂载/上次会话的旧草稿)。
+  const wasOpenRef = useRef(open);
+  useEffect(() => {
+    if (open && !wasOpenRef.current) setDraft(value);
+    wasOpenRef.current = open;
+  }, [open, value]);
 
   // 2026-08-04：重設 → 按当前选中的指标恢复其默认参数 (原固定 DEFAULT_VALUE 已废弃)
   const reset = () => {
