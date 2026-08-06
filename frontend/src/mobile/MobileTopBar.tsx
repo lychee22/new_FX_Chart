@@ -16,10 +16,12 @@ interface MobileTopBarProps {
   onTitleClick?: () => void;
   /** 2026-08-05：手动刷新 — 重拉 K 线 + 指标全量数据 (断线补数据/数据异常重试) */
   onRefresh?: () => void;
+  /** 2026-08-06：刷新进行中 — 刷新图标旋转转圈 (不影响界面展示) */
+  refreshing: boolean;
 }
 
 /** 移动端顶部导航 (44px 高, 含安全区适配) */
-export function MobileTopBar({ instrument, onBack, onFullscreen, onSearch, onTitleClick, onRefresh }: MobileTopBarProps) {
+export function MobileTopBar({ instrument, onBack, onFullscreen, onSearch, onTitleClick, onRefresh, refreshing }: MobileTopBarProps) {
   const { lang } = useI18n();
   const main = instrument?.name ?? '—';
   const sub = instrument ? (lang === 'en' ? instrument.code : secondaryName(instrument.code, lang)) : '';
@@ -37,7 +39,7 @@ export function MobileTopBar({ instrument, onBack, onFullscreen, onSearch, onTit
           <Button
             type="text"
             shape="circle"
-            icon={<ReloadOutlined />}
+            icon={<ReloadOutlined className={refreshing ? 'spin' : ''} />}
             onClick={onRefresh}
             aria-label="Refresh"
           />

@@ -28,6 +28,8 @@ interface ToolbarProps {
   onExport: () => void;
   /** 2026-08-05：手动刷新 — 重拉 K 线 + 指标全量数据 (断线补数据/数据异常重试) */
   onRefresh: () => void;
+  /** 2026-08-06：刷新进行中 — 刷新按钮旋转转圈 (不影响界面展示) */
+  refreshing: boolean;
   onUndo: () => void;
   canUndo: boolean;
   /** 2026-07-31：清除所有已绘制对象 */
@@ -214,8 +216,14 @@ export default function Toolbar(props: ToolbarProps) {
         aria-label={t('ClearAll')}
       >🧹</button>
       <button type="button" className="icon-btn" onClick={p.onExport} title="Export" aria-label="Export">⤓</button>
-      {/* 2026-08-05：手动刷新 — 断线补数据 / 加载失败重试 */}
-      <button type="button" className="icon-btn" onClick={p.onRefresh} title={t('Refresh')} aria-label={t('Refresh')}>⟳</button>
+      {/* 2026-08-05：手动刷新 — 断线补数据 / 加载失败重试; 2026-08-06：刷新期间按钮旋转转圈 */}
+      <button
+        type="button"
+        className={`icon-btn${p.refreshing ? ' spinning' : ''}`}
+        onClick={p.onRefresh}
+        title={t('Refresh')}
+        aria-label={t('Refresh')}
+      >⟳</button>
 
       {/* 语言切换 */}
       <div className="lang-group" aria-label="Language">

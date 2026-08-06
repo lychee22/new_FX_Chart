@@ -49,6 +49,8 @@ export default function App() {
   // 初始与当前指标匹配 (upper=0 NONE / lower=VOLUME 均无参数)。
   const [upperParams, setUpperParams] = useState<number[]>(() => defaultParamsFor('upper', 0));
   const [lowerParams, setLowerParams] = useState<number[]>(() => defaultParamsFor('lower', DEFAULT_MOBILE_LOWER));
+  // 2026-08-06：刷新进行中 — ChartPanel 经 onRefreshingChange 上报, 驱动工具栏/顶栏刷新按钮转圈
+  const [refreshing, setRefreshing] = useState(false);
 
   // 2026-07-31：把同一帧密集触发的多次 toggle 合并为一次 setLower，
   // 避免 ChartPanel.loadLowerIndicators 每次都「清空+重建」造成逐个 pane 闪现
@@ -288,6 +290,8 @@ export default function App() {
             onRemoveLower={removeLower}
             registerExport={registerExport}
             onRefresh={onRefresh}
+            refreshing={refreshing}
+            onRefreshingChange={setRefreshing}
             registerRefresh={registerRefresh}
             onUndo={onUndo}
             canUndo={canUndo}
@@ -318,6 +322,7 @@ export default function App() {
               onShiftRight={onShiftRight}
               onExport={onExport}
               onRefresh={onRefresh}
+              refreshing={refreshing}
               onUndo={onUndo}
               canUndo={canUndo}
               canClear={canClear}
@@ -342,6 +347,7 @@ export default function App() {
               onRemoveLower={removeLower}
               registerExport={registerExport}
               registerRefresh={registerRefresh}
+              onRefreshingChange={setRefreshing}
               onUndo={onUndo}
               canUndo={canUndo}
               registerCanUndo={registerCanUndo}

@@ -1720,6 +1720,8 @@ export default function ChartPanel(props: ChartPanelProps) {
     const chart = chartRef.current;
     const series = mainSeriesRef.current;
     if (!chart || !series) return;
+    // 2026-08-06：通知父组件刷新开始 — 驱动工具栏/顶栏刷新按钮转圈 (结束在 finally)
+    props.onRefreshingChange?.(true);
     const code = props.code;
     const interval = props.interval;
     const stillCurrent = () =>
@@ -1742,6 +1744,8 @@ export default function ChartPanel(props: ChartPanelProps) {
     } catch (e) {
       console.error('刷新数据失败', e);
       message.error(t('LoadFailed'));
+    } finally {
+      props.onRefreshingChange?.(false);
     }
   };
   // 镜像最新实例 — 挂载期 WS 重连回调与工具栏/顶栏刷新按钮都经由 ref 调用
