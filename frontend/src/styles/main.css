@@ -769,6 +769,11 @@ body {
     right: calc(env(safe-area-inset-right) + 48px);
   }
 
+  /* 2026-08-06: move info overlay below fullscreen toolbar (34px buttons + 8px gaps) */
+  .mobile-shell.is-chart-fullscreen .info-overlay {
+    top: calc(env(safe-area-inset-top) + 8px + 34px + 8px);
+  }
+
   /* 2026-08-05：native orientation.lock 失败时的 CSS 旋转兜底
      —— JS 200ms 探测发现物理朝向仍为 portrait, 给 .mobile-shell 加 .force-landscape,
         在竖屏设备上通过 transform 把 .mobile-chart-wrap 整体旋转 90° 铺出横屏图表区域。
@@ -805,6 +810,16 @@ body {
   /* tools-hint 全屏偏移重新按旋转后的视觉右边缘计算 */
   .mobile-shell.is-chart-fullscreen.force-landscape .tools-hint {
     right: calc(env(safe-area-inset-bottom) + 48px);
+  }
+
+  /* 2026-08-06: rotate fallback maps overlay top to physical right, horizontal insets to bottom/top.
+     只设 left + max-width、不设 right — absolute 双端定位会让浮层拉满整个视觉宽度 (宽度异常)。
+     max-width 按旋转后视觉宽度 (物理高度) 收缩, 内容超宽时在右端换行, 不再占满整行。 */
+  .mobile-shell.is-chart-fullscreen.force-landscape .info-overlay {
+    top: calc(env(safe-area-inset-right) + 8px + 34px + 8px);
+    left: max(6px, env(safe-area-inset-bottom));
+    right: auto;
+    max-width: calc(100% - 12px - env(safe-area-inset-bottom) - env(safe-area-inset-top));
   }
 
   /* 2026-08-05：native lock 失败时的"请旋转设备"文字提示。
@@ -964,6 +979,13 @@ body {
     font-size: 13px;
     color: #6b7280;
     font-weight: 500;
+  }
+
+  /* 2026-08-06: keep focused select/number inputs >=16px so iOS Safari does not auto-zoom */
+  .mobile-settings-panel .ant-select-selector,
+  .mobile-settings-panel .ant-select-selection-search-input,
+  .mobile-settings-panel .ant-input-number-input {
+    font-size: 16px;
   }
   .mobile-settings-params {
     display: flex;
