@@ -463,6 +463,12 @@ export default function ChartPanel(props: ChartPanelProps) {
         console.error('加载数据失败', e);
         // 2026-08-05：K 线加载失败不再静默 — 用户可见提示, 可通过工具栏/顶栏刷新按钮重试
         message.error(t('LoadFailed'));
+      } finally {
+        // 2026-08-06：成功/失败都解除首屏 loading (组件卸载或参数切换时跳过)
+        if (!cancelled && isFirstLoad && !initialLoadedRef.current) {
+          initialLoadedRef.current = true;
+          setInitialLoading(false);
+        }
       }
     })();
     return () => { cancelled = true; };
@@ -1916,7 +1922,13 @@ export default function ChartPanel(props: ChartPanelProps) {
     }, 1300);
   };
   // 卸载清理
-  useEffect(() => () => { cancelHide(); }, []);
+  useEffect(() => () => {
+    cancelHide();
+    if (crosshairRafRef.current !== null) {
+      window.cancelAnimationFrame(crosshairRafRef.current);
+      crosshairRafRef.current = null;
+    }
+  }, []);
 
   /** 从鼠标事件参数中提取实际价格 (基于鼠标 Y 坐标, 而非 bar 收盘价)。 */
   const getMousePrice = (param: MouseEventParams<Time>): number | null => {
@@ -2102,43 +2114,91 @@ export default function ChartPanel(props: ChartPanelProps) {
     return { time, price };
   };
 
-  // 2026-08-05：触屏路径统一处理 — 自绘十字光标线 + info 浮层 + 绘图预览
-  // 鼠标路径仍走库的 subscribeCrosshairMove (这里直接 return, 桌面零变化)
-  // 触屏路径：调库 setCrosshairPosition 显示库原生 vertLine/horzLine, 自动触发 subscribeCrosshairMove → info 浮层
-  const onChartPointerMove = (e: ReactPointerEvent<HTMLDivElement>) => {
-    if (e.pointerType === 'mouse') return;
+  // 2026-08-06：长按十字线渲染统一入口 — 从 lastTouchPointRef 取最近一次手指位置,
+  // 主 pane 判定后调库 setCrosshairPosition 显示原生 vertLine/horzLine,
+  // 自动触发 subscribeCrosshairMove 回调 → info 浮层。供 rAF 回调与长按激活共用。
+  const renderCrosshairFromLastPoint = () => {
+    crosshairRafRef.current = null;
+    if (!longPressActiveRef.current) return;
+    const pt = lastTouchPointRef.current;
     const chart = chartRef.current;
     const series = mainSeriesRef.current;
-    if (!chart || !series) return;
     const el = containerRef.current;
-    if (!el) return;
+    if (!pt || !chart || !series || !el) return;
     const rect = el.getBoundingClientRect();
-    const localY = e.clientY - rect.top;
-    cancelHide();
-    const tp = clientToTimePrice(e.clientX, e.clientY);
+    const localY = pt.clientY - rect.top;
+    const tp = clientToTimePrice(pt.clientX, pt.clientY);
     const mainRect = paneRects[0];
     // 仅在主图 pane 范围内显示 (paneIndex === 0)
     const inMainPane = mainRect && localY >= mainRect.top && localY <= mainRect.top + mainRect.height;
     if (tp && inMainPane) {
-      // 库原生：调 setCrosshairPosition 显示 vertLine/horzLine + 触发 subscribeCrosshairMove 回调 → info 浮层
       chart.setCrosshairPosition(tp.price, tp.time, series);
     } else {
       chart.clearCrosshairPosition();
       setInfo('');
     }
-    // 工具激活时驱动绘图预览 (轻点落点仍由库的 subscribeClick 完成)
-    if (tp && props.tool !== TOOL.NONE) {
-      drawingMgrRef.current?.handleMouseMove(tp.time, tp.price);
+  };
+
+  // 2026-08-06：rAF 帧节流 — 同帧内多次 pointermove 只合并执行一次渲染
+  const scheduleCrosshairUpdate = () => {
+    if (crosshairRafRef.current !== null) return;
+    crosshairRafRef.current = window.requestAnimationFrame(renderCrosshairFromLastPoint);
+  };
+
+  const cancelCrosshairFrame = () => {
+    if (crosshairRafRef.current !== null) {
+      window.cancelAnimationFrame(crosshairRafRef.current);
+      crosshairRafRef.current = null;
     }
   };
 
-  // 2026-08-05：手指离开 chart → 3 秒后自动隐藏库光标线 + info
+  // 2026-08-05：触屏路径统一处理 — 鼠标路径仍走库的 subscribeCrosshairMove (这里直接 return, 桌面零变化)
+  // 2026-08-06：修正判定时机 — 8px 位移取消长按只在未激活时生效;
+  // 激活后手指移动只驱动十字线 (经 rAF 帧节流), 不再取消。
+  const onChartPointerMove = (e: ReactPointerEvent<HTMLDivElement>) => {
+    if (e.pointerType === 'mouse') return;
+    const chart = chartRef.current;
+    const series = mainSeriesRef.current;
+    if (!chart || !series) return;
+    const start = lowerTapStartRef.current;
+    const isOwnPointer = !!start && start.pointerId === e.pointerId;
+    // 未激活 (600ms 等待期内): 位移超阈值视为取消长按; 激活后不再取消, 十字线持续跟随手指
+    if (!longPressActiveRef.current && isOwnPointer &&
+        Math.hypot(e.clientX - start.x, e.clientY - start.y) > LOWER_TAP_THRESHOLD) {
+      cancelLongPress();
+      lastTouchPointRef.current = null;
+    }
+    // 记录本手指最新位置: 未激活时供长按激活瞬间取用, 激活后作为下一帧十字线目标
+    if (isOwnPointer) {
+      lastTouchPointRef.current = { clientX: e.clientX, clientY: e.clientY };
+    }
+    if (!longPressActiveRef.current) {
+      if (props.tool !== TOOL.NONE) {
+        const tp = clientToTimePrice(e.clientX, e.clientY);
+        if (tp) drawingMgrRef.current?.handleMouseMove(tp.time, tp.price);
+      }
+      return;
+    }
+    cancelHide();
+    scheduleCrosshairUpdate();
+  };
+
+  // 2026-08-05：手指离开 chart → 1.3 秒后自动隐藏库光标线 + info
   const onChartPointerLeave = () => {
+    cancelLongPress();
+    longPressActiveRef.current = false;
+    lastTouchPointRef.current = null;
+    cancelCrosshairFrame();
     scheduleHide();
   };
 
   // 2026-08-05：触屏事件被系统打断 (电话/弹窗) → 立即隐藏, 不留尾
   const onChartPointerCancel = () => {
+    lowerTapStartRef.current = null;
+    cancelLongPress();
+    longPressActiveRef.current = false;
+    lastTouchPointRef.current = null;
+    cancelCrosshairFrame();
     chartRef.current?.clearCrosshairPosition();
     setInfo('');
     cancelHide();
@@ -2372,6 +2432,13 @@ export default function ChartPanel(props: ChartPanelProps) {
           drawingMgrRef.current?.moveTextBox(idx, time, price);
         }}
       />
+      {/* 2026-08-06：首屏加载覆盖层 — 首次进入页面图表数据加载期间显示 (3s 演示时长见 INITIAL_LOADING_MIN_MS) */}
+      {initialLoading && (
+        <div className="chart-loading-overlay">
+          <Spin size="large" />
+          <span className="chart-loading-text">{t('Loading')}…</span>
+        </div>
+      )}
     </div>
   );
 }
