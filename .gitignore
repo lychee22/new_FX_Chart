@@ -3,3 +3,7 @@
 frontend/.zcode
 frontend/node_modules
 frontend/dist
+.workbuddy-ai
+backend/target/
+backend/.zcode/
+backend/*.log
