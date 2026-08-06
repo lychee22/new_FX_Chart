@@ -7,7 +7,7 @@ export default defineConfig({
   server: {
     // 2026-07-22 11:59:52：Linux 开发入口固定对外监听 23722，端口冲突时直接失败。
     host: '0.0.0.0',
-    port: 23722,
+    port: 23721,
     strictPort: true,
     // 开发期把 /api 请求代理到 Spring Boot, 避免 CORS
     proxy: {
