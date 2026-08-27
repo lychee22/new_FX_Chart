@@ -649,6 +649,36 @@ body {
     display: flex;
     gap: 2px;
   }
+  /* 2026-08-10: 开放语言切换 — 顶栏三按钮组 (EN/繁/简), 紧凑样式, 与刷新按钮并排 */
+  .mobile-topbar-lang-group {
+    display: flex;
+    gap: 2px;
+    margin-right: 4px;
+  }
+  .mobile-lang-btn {
+    height: 28px;
+    min-width: 30px;
+    padding: 0 6px;
+    border: 1px solid #d4d9de;
+    border-radius: 4px;
+    background: #fff;
+    color: #4b5563;
+    font-size: 12px;
+    font-weight: 500;
+    line-height: 1;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+    touch-action: manipulation;
+    transition: background-color 0.15s, color 0.15s, border-color 0.15s;
+  }
+  .mobile-lang-btn:active {
+    opacity: 0.6;
+  }
+  .mobile-lang-btn.active {
+    background: #2c5282;
+    border-color: #2c5282;
+    color: #fff;
+  }
 
   /* 详情页 Tab */
   .mobile-tabs {
@@ -774,56 +804,12 @@ body {
     top: calc(env(safe-area-inset-top) + 8px + 34px + 8px);
   }
 
-  /* 2026-08-05：native orientation.lock 失败时的 CSS 旋转兜底
-     —— JS 200ms 探测发现物理朝向仍为 portrait, 给 .mobile-shell 加 .force-landscape,
-        在竖屏设备上通过 transform 把 .mobile-chart-wrap 整体旋转 90° 铺出横屏图表区域。
+  /* 2026-08-07：不再使用 CSS 旋转兜底 — rotate(90deg) 会把图表内容整体旋转,
+     x/y 轴错位。原生全屏/锁屏失败时只进入全屏态,
+     由 .mobile-rotate-hint 提示用户物理旋转设备。 */
 
-     关键点:
-       - 仅与 .is-chart-fullscreen 同时存在才生效 → 全屏状态是前置条件。
-       - getBoundingClientRect 在 transform 旋转后自动返回视觉矩形, 因此图表交互
-         (坐标换算 / 文字框拖动 / 绘图 / 十字光标) 全部无需改业务代码。
-       - 旋转 90° 后视觉上"右"对应物理"上", "左"对应物理"下",
-         安全区方向需要重新映射: top→right, left→bottom。 */
-  .mobile-shell.is-chart-fullscreen.force-landscape .mobile-chart-wrap {
-    position: fixed;
-    top: 0;
-    left: 100vw;                 /* 旋转后左偏一屏宽, 让盒子回到屏幕内 */
-    width: 100vh;                /* 视觉宽度 = 设备高度 */
-    height: 100vw;               /* 视觉高度 = 设备宽度 */
-    transform: rotate(90deg);
-    transform-origin: 0 0;
-    z-index: 25;                 /* 高于 body 正常流 */
-    background: #fff;
-  }
-  /* 旋转后顶部对应设备右边缘, 退出按钮沿用 calc(env(safe-area-inset-right) + 10px) 作为视觉顶部 */
-  .mobile-shell.is-chart-fullscreen.force-landscape .mobile-landscape-exit {
-    top: calc(env(safe-area-inset-right) + 10px);
-    right: auto;
-    left: calc(env(safe-area-inset-bottom) + 10px);
-  }
-  /* 工具栏视觉顶部同样为 right inset */
-  .mobile-shell.is-chart-fullscreen.force-landscape .mobile-landscape-tools {
-    top: calc(env(safe-area-inset-right) + 8px);
-    left: auto;
-    right: calc(env(safe-area-inset-bottom) + 56px);
-  }
-  /* tools-hint 全屏偏移重新按旋转后的视觉右边缘计算 */
-  .mobile-shell.is-chart-fullscreen.force-landscape .tools-hint {
-    right: calc(env(safe-area-inset-bottom) + 48px);
-  }
-
-  /* 2026-08-06: rotate fallback maps overlay top to physical right, horizontal insets to bottom/top.
-     只设 left + max-width、不设 right — absolute 双端定位会让浮层拉满整个视觉宽度 (宽度异常)。
-     max-width 按旋转后视觉宽度 (物理高度) 收缩, 内容超宽时在右端换行, 不再占满整行。 */
-  .mobile-shell.is-chart-fullscreen.force-landscape .info-overlay {
-    top: calc(env(safe-area-inset-right) + 8px + 34px + 8px);
-    left: max(6px, env(safe-area-inset-bottom));
-    right: auto;
-    max-width: calc(100% - 12px - env(safe-area-inset-bottom) - env(safe-area-inset-top));
-  }
-
-  /* 2026-08-05：native lock 失败时的"请旋转设备"文字提示。
-     平时定位在图表区底部居中; CSS 旋转生效后被 .force-landscape 隐藏。
+  /* 2026-08-05：原生锁屏/全屏失败时提示"请旋转设备"。
+     竖屏全屏态常驻; 横屏视口下用下面的 media query 隐藏。
      z-index 高于图表浮层 (10/11) 但低于退出按钮 (30)。 */
   .mobile-rotate-hint {
     position: absolute;
@@ -843,6 +829,13 @@ body {
   @keyframes rotate-hint-fade {
     from { opacity: 0; transform: translate(-50%, 8px); }
     to   { opacity: 1; transform: translate(-50%, 0); }
+  }
+
+  /* 横屏视口下不再显示旋转提示 */
+  @media (orientation: landscape) {
+    .mobile-shell.is-chart-fullscreen .mobile-rotate-hint {
+      display: none;
+    }
   }
 
   /* 免责声明 */
@@ -981,11 +974,12 @@ body {
     font-weight: 500;
   }
 
-  /* 2026-08-06: keep focused select/number inputs >=16px so iOS Safari does not auto-zoom */
+  /* 2026-08-07: keep focused select/number inputs >=16px so iOS Safari does not auto-zoom.
+     antd v5 injects a higher-specificity 14px rule for the select search input, so this needs !important. */
   .mobile-settings-panel .ant-select-selector,
   .mobile-settings-panel .ant-select-selection-search-input,
   .mobile-settings-panel .ant-input-number-input {
-    font-size: 16px;
+    font-size: 16px !important;
   }
   .mobile-settings-params {
     display: flex;

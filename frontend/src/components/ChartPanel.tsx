@@ -12,6 +12,7 @@ import {
   type ISeriesApi,
   type Time,
   type MouseEventParams,
+  type Coordinate,
 } from 'lightweight-charts';
 import { Button, message, Spin } from 'antd';
 import { ShrinkOutlined, ArrowsAltOutlined, RedoOutlined, DeleteOutlined, CaretUpOutlined} from '@ant-design/icons';
@@ -1933,7 +1934,19 @@ export default function ChartPanel(props: ChartPanelProps) {
   /** 从鼠标事件参数中提取实际价格 (基于鼠标 Y 坐标, 而非 bar 收盘价)。 */
   const getMousePrice = (param: MouseEventParams<Time>): number | null => {
     if (!param.point || !mainSeriesRef.current) return null;
-    const price = mainSeriesRef.current.coordinateToPrice(param.point.y);
+    let y = param.point.y;
+    const paneIdx = param.paneIndex;
+    // Sub-pane point.y is pane-local; remap it to the main pane Y space.
+    if (paneIdx !== undefined && paneIdx !== 0 && paneRects[paneIdx]) {
+      const mainTop = paneRects[0]?.top ?? 0;
+      y = (param.point.y + paneRects[paneIdx].top - mainTop) as Coordinate;
+    }
+    // 预览端点限制在主图可视范围内，避免副图预览线超出主图边界。
+    const mainRect = paneRects[0];
+    if (mainRect && mainRect.height > 0) {
+      y = Math.min(Math.max(y, 0), mainRect.height - 1) as Coordinate;
+    }
+    const price = mainSeriesRef.current.coordinateToPrice(y);
     return price;
   };
 

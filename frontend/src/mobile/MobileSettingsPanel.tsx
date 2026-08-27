@@ -43,10 +43,10 @@ const UPPER_OPTIONS = [
 ];
 
 // 2026-08-04：下层技术分析增加"關閉"选项 (LOWER_TECH.NONE) — 移动端最多一个副图, 可关闭。
-// 其余选项 labelKey 走 i18n, "關閉"为面板固定繁体文案。
+// 2026-08-11："關閉"亦接入 i18n, 按当前语言渲染 (en: Off / tc: 關閉 / sc: 关闭)。
 // 导出给 MobileLayout 复用 — 点击副图描述条弹出的指标选择列表与设置面板同一数据源。
 export const LOWER_OPTIONS: Array<{ value: number; labelKey?: string; label?: string }> = [
-  { value: LOWER_TECH.NONE, label: '關閉' },
+  { value: LOWER_TECH.NONE, labelKey: 'Off' as const },
   { value: LOWER_TECH.VOLUME, labelKey: 'VOLUME' as const },
   { value: LOWER_TECH.RSI, labelKey: 'RSI' as const },
   { value: LOWER_TECH.MACD, labelKey: 'MACD' as const },
@@ -63,8 +63,9 @@ export const LOWER_OPTIONS: Array<{ value: number; labelKey?: string; label?: st
   { value: LOWER_TECH.ATR, labelKey: 'ATR' as const },
 ];
 
-// 下層参数槽标签: 3 参数指标 (MACD/STC) 用 快/慢/訊號, 其余用 週期N
-const LOWER_SLOT_LABELS = ['快', '慢', '訊號'];
+// 下層参数槽标签键: 3 参数指标 (MACD/STC) 用 Fast/Slow/Signal, 其余用 PeriodN
+// 2026-08-11：键名固定, 实际文案在组件内通过 t() 按语言取 — 避免模块顶层依赖 hook。
+const LOWER_SLOT_LABEL_KEYS = ['Fast', 'Slow', 'Signal'] as const;
 
 export function MobileSettingsPanel({ open, onClose, value, onApply, getContainer }: MobileSettingsPanelProps) {
   const { t } = useI18n();
@@ -107,11 +108,15 @@ export function MobileSettingsPanel({ open, onClose, value, onApply, getContaine
   // 2026-08-04：参数槽位数随指标动态 (0~3)
   const upperCount = UPPER_PARAM_COUNT[draft.upper] ?? 0;
   const lowerCount = LOWER_PARAM_COUNT[draft.lower] ?? 0;
-  const lowerLabels = lowerCount === 3 ? LOWER_SLOT_LABELS : Array.from({ length: lowerCount }, (_, i) => `週期${i + 1}`);
+  // 2026-08-11：3 参数指标用 快/慢/信號, 其余用 週期N — 文案按当前语言渲染
+  const lowerLabels =
+    lowerCount === 3
+      ? LOWER_SLOT_LABEL_KEYS.map((k) => t(k as any))
+      : Array.from({ length: lowerCount }, (_, i) => `${t('Period')}${i + 1}`);
 
   return (
     <Drawer
-      title="設定"
+      title={t('Settings')}
       placement="bottom"
       height="100%"
       open={open}
@@ -122,12 +127,12 @@ export function MobileSettingsPanel({ open, onClose, value, onApply, getContaine
       styles={{ body: { padding: 16 } }}
       extra={
         <Button type="link" onClick={reset}>
-          重設
+          {t('Reset')}
         </Button>
       }
     >
       <section className="mobile-settings-section">
-        <div className="mobile-settings-label">上層技術分析</div>
+        <div className="mobile-settings-label">{t('UpperLayerAnalysis')}</div>
         <Select
           value={draft.upper}
           onChange={setUpper}
@@ -139,7 +144,7 @@ export function MobileSettingsPanel({ open, onClose, value, onApply, getContaine
             {Array.from({ length: upperCount }, (_, i) => (
               <ParamSlot
                 key={i}
-                label={`時間槽${i + 1}`}
+                label={`${t('Param')}${i + 1}`}
                 value={draft.upperParams[i]}
                 onChange={(v) => setUpperParam(i, v)}
               />
@@ -151,7 +156,7 @@ export function MobileSettingsPanel({ open, onClose, value, onApply, getContaine
       <Divider />
 
       <section className="mobile-settings-section">
-        <div className="mobile-settings-label">下層技術分析</div>
+        <div className="mobile-settings-label">{t('LowerLayerAnalysis')}</div>
         <Select
           value={draft.lower}
           onChange={setLower}
@@ -174,7 +179,7 @@ export function MobileSettingsPanel({ open, onClose, value, onApply, getContaine
 
       <div className="mobile-settings-footer">
         <Button block size="large" onClick={reset}>
-          重設
+          {t('Reset')}
         </Button>
         <Button
           block
@@ -185,7 +190,7 @@ export function MobileSettingsPanel({ open, onClose, value, onApply, getContaine
             onClose();
           }}
         >
-          套用
+          {t('Apply')}
         </Button>
       </div>
     </Drawer>

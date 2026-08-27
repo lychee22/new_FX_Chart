@@ -8,6 +8,11 @@ export type Lang = 'en' | 'tc' | 'sc';
 export const STRINGS = {
   en: {
     chart: 'Chart',
+    // 2026-08-11：设置面板 (MobileSettingsPanel)
+    Settings: 'Settings', Apply: 'Apply',
+    UpperLayerAnalysis: 'Overlay Indicator', LowerLayerAnalysis: 'Subchart Indicator',
+    Fast: 'Fast', Slow: 'Slow', Signal: 'Signal',
+    Period: 'Period', Param: 'Param',
     // 周期
     Daily: 'Daily', Weekly: 'Weekly', Monthly: 'Monthly',
     Min1: '1-min', Min5: '5-min', Min10: '10-min', Min15: '15-min',
@@ -54,10 +59,15 @@ export const STRINGS = {
     sell: 'Sell', buy: 'Buy',
     ExitFullscreen: 'Exit Fullscreen',
     // 2026-08-05：横屏全屏模式提示 (全屏时常驻显示, 提示用户当前状态 + 退出方式)
-    RotateDeviceHint: 'Landscape fullscreen mode · Tap to exit',
+    RotateDeviceHint: 'Rotate device for landscape mode · tap to exit',
   },
   tc: {
     chart: '圖表',
+    // 2026-08-11：設置面板 (MobileSettingsPanel)
+    Settings: '設定', Apply: '套用',
+    UpperLayerAnalysis: '上層技術分析', LowerLayerAnalysis: '下層技術分析',
+    Fast: '快', Slow: '慢', Signal: '信號線',
+    Period: '週期', Param: '參數',
     Daily: '日圖', Weekly: '週圖', Monthly: '月圖',
     Min1: '1分鐘', Min5: '5分鐘', Min10: '10分鐘', Min15: '15分鐘',
     Min30: '30分鐘', Hour1: '1小時', Hour2: '2小時', Hour4: '4小時',
@@ -96,10 +106,15 @@ export const STRINGS = {
     sell: '賣出', buy: '買入',
     ExitFullscreen: '退出全屏',
     // 2026-08-05：橫屏全屏模式提示 (全屏時常駐顯示, 提示用戶當前狀態 + 退出方式)
-    RotateDeviceHint: '橫屏全屏模式 · 點擊退出',
+    RotateDeviceHint: '請旋轉裝置進入橫屏 · 點擊退出',
   },
   sc: {
     chart: '图表',
+    // 2026-08-11：设置面板 (MobileSettingsPanel)
+    Settings: '设置', Apply: '应用',
+    UpperLayerAnalysis: '上层技术分析', LowerLayerAnalysis: '下层技术分析',
+    Fast: '快', Slow: '慢', Signal: '信号线',
+    Period: '周期', Param: '参数',
     Daily: '日图', Weekly: '周图', Monthly: '月图',
     Min1: '1分钟', Min5: '5分钟', Min10: '10分钟', Min15: '15分钟',
     Min30: '30分钟', Hour1: '1小时', Hour2: '2小时', Hour4: '4小时',
@@ -138,7 +153,7 @@ export const STRINGS = {
     sell: '卖出', buy: '买入',
     ExitFullscreen: '退出全屏',
     // 2026-08-05：横屏全屏模式提示 (全屏时常驻显示, 提示用户当前状态 + 退出方式)
-    RotateDeviceHint: '横屏全屏模式 · 点击退出',
+    RotateDeviceHint: '请旋转设备进入横屏 · 点击退出',
   },
 } as const;
 

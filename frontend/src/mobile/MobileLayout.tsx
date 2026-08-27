@@ -12,6 +12,7 @@ import {
   SwapOutlined,
 } from '@ant-design/icons';
 import { useI18n } from '../i18n';
+import { useLandscapeFullscreen } from '../hooks/useLandscapeFullscreen';
 import type { Instrument } from '../types';
 import { INTERVAL, UPPER_TECH, LOWER_TECH } from '../types';
 import type { NationPalette } from '../constants/nation';
@@ -27,32 +28,6 @@ import {
   type MobileSettingsValue,
   LOWER_OPTIONS,
 } from './MobileSettingsPanel';
-
-// 全屏 / 横屏辅助: 兼容 webkit 前缀 (旧版 iOS/Android), 所有操作 best-effort + 静默降级
-// iframe 内 screen.orientation.lock 会失败 → 优雅退化为竖屏全屏; iOS Safari 无 lock API → 可选链 no-op
-type FsDoc = Document & {
-  webkitExitFullscreen?: () => Promise<void>;
-  webkitFullscreenElement?: Element | null;
-};
-
-const isFullscreenElement = (): boolean => {
-  const d = document as FsDoc;
-  return !!(document.fullscreenElement || d.webkitFullscreenElement);
-};
-
-const requestElementFullscreen = (el: HTMLElement): Promise<void> => {
-  type FsEl = HTMLElement & {
-    requestFullscreen?: () => Promise<void>;
-    webkitRequestFullscreen?: () => Promise<void>;
-  };
-  const e = el as FsEl;
-  const fn = e.requestFullscreen ?? e.webkitRequestFullscreen;
-  if (fn) return Promise.resolve(fn.call(e));
-  const docEl = document.documentElement as FsEl;
-  const fn2 = docEl.requestFullscreen ?? docEl.webkitRequestFullscreen;
-  if (fn2) return Promise.resolve(fn2.call(docEl));
-  return Promise.resolve(); // 无全屏支持 → lock 尝试单独失败也无害
-};
 
 // 轻点判定: pointer 位移小于该值视为轻点, 否则视为拖动/平移
 const TAP_MOVE_THRESHOLD = 8;
@@ -223,140 +198,15 @@ export default function MobileLayout(props: MobileLayoutProps) {
   const currentTypeLabel =
     typeOptions.find((o) => o.value === props.chartType)?.label ?? '';
 
-  // 图表区横屏观看: 仅对 .mobile-chart-wrap 调用 requestFullscreen,
-  // TopBar / Tabs / 工具栏 / 免责声明会通过 isChartFullscreen 状态隐藏。
-  // fullscreenchange 是 isChartFullscreen 的唯一事实来源: 覆盖所有退出路径
-  // (系统手势下滑 / Esc / iOS 浏览器 UI / 宿主程序退出)。
-  const chartWrapRef = useRef<HTMLDivElement>(null);
-  const [isChartFullscreen, setIsChartFullscreen] = useState(() => isFullscreenElement());
-
-  useEffect(() => {
-    const onChange = () => setIsChartFullscreen(isFullscreenElement());
-    document.addEventListener('fullscreenchange', onChange);
-    document.addEventListener('webkitfullscreenchange', onChange);
-    return () => {
-      document.removeEventListener('fullscreenchange', onChange);
-      document.removeEventListener('webkitfullscreenchange', onChange);
-    };
-  }, []);
-
-  // 2026-08-03：组件卸载时主动退出全屏 (导航离开 mid-fullscreen 时防残留)
-  useEffect(() => {
-    return () => {
-      if (isFullscreenElement()) {
-        const d = document as FsDoc;
-        const fn = d.exitFullscreen ?? d.webkitExitFullscreen;
-        void fn?.call(d);
-      }
-    };
-  }, []);
-
-  // 串行化进入流程, 防止 requestFullscreen 在途时重复进入
-  const landscapeBusyRef = useRef(false);
-
-  // 2026-08-05：CSS 旋转兜底状态 — 进入横屏时**无脑**启用, 给 .mobile-shell 加 .force-landscape,
-  // 让 .mobile-chart-wrap 通过 transform 旋转 90° 在竖屏设备上铺出横屏区域。
-  // 状态而非 ref: 触发 CSS className 重渲染, 类比 isChartFullscreen。
-  const [forceLandscape, setForceLandscape] = useState(false);
-
-  // 2026-08-05：进入横屏 — 不再等待 lock 结果, 直接启用 CSS 旋转兜底。
-  // 真机调研 (vivo 原生 / 夸克 / 部分 WebView) 发现: lock 调用不抛错也不旋转,
-  // 且 screen.orientation.type 不会更新, 200ms 探测无法判别成功, 兜底永远进不去。
-  // 行业标准: lock 优先 + CSS rotate 兜底必须同时做。本实现把 CSS 旋转当作常态, lock 当作锦上添花。
-  const enterLandscape = useCallback(async () => {
-    if (landscapeBusyRef.current) return;
-    const el = chartWrapRef.current;
-    if (!el) return;
-    landscapeBusyRef.current = true;
-    console.log('[landscape-debug] enterLandscape called', {
-      isFs: isFullscreenElement(),
-      oriType: (screen as { orientation?: { type?: string } }).orientation?.type,
-    });
-    try {
-      // 1) requestFullscreen — best effort, 失败也走 CSS 旋转
-      if (!isFullscreenElement()) {
-        try {
-          await requestElementFullscreen(el);
-          console.log('[landscape-debug] requestFullscreen resolved');
-        } catch (e) {
-          console.log('[landscape-debug] requestFullscreen rejected', e);
-        }
-      }
-      // 2) orientation.lock — fire-and-forget, 静默失败
-      try {
-        const ori = (screen as { orientation?: { lock?: (o: string) => Promise<void>; type?: string } }).orientation;
-        const p = ori?.lock?.('landscape');
-        if (p && typeof (p as Promise<void>).then === 'function') {
-          (p as Promise<void>).then(
-            () => console.log('[landscape-debug] orientation.lock resolved, type=', ori?.type),
-            (e: unknown) => console.log('[landscape-debug] orientation.lock rejected', e),
-          );
-        } else {
-          console.log('[landscape-debug] orientation.lock API not available');
-        }
-      } catch (e) {
-        console.log('[landscape-debug] orientation.lock threw', e);
-      }
-      // 3) 立即启用 CSS 旋转兜底 — 不等待 lock, 视觉横屏必须可见
-      setForceLandscape(true);
-      console.log('[landscape-debug] forceLandscape = true (CSS rotation enabled)');
-    } finally {
-      landscapeBusyRef.current = false;
-    }
-  }, []);
-
-  const exitLandscape = useCallback(async () => {
-    if (!isFullscreenElement()) return;
-    try {
-      const d = document as FsDoc;
-      const fn = d.exitFullscreen ?? d.webkitExitFullscreen;
-      await fn?.call(d);
-    } catch { /* ignore */ }
-    // 规范: 退出全屏时 lock 自动释放; 防御性调用 unlock (未锁定时为 no-op)
-    try { (screen as { orientation?: { unlock?: () => void } }).orientation?.unlock?.(); } catch { /* ignore */ }
-    // 退出全屏时同时清除 CSS 旋转兜底
-    setForceLandscape(false);
-    console.log('[landscape-debug] exitLandscape -> forceLandscape = false');
-  }, []);
-
-  // 顶部栏全屏按钮仍走此处
-  const toggleFullscreen = useCallback(() => {
-    if (isFullscreenElement()) void exitLandscape();
-    else void enterLandscape();
-  }, [enterLandscape, exitLandscape]);
-
-  // 2026-08-03：物理旋转自动进入/退出横屏 — 手动旋转为横屏时自动 requestFullscreen,
-  // 转回竖屏自动退出。跨源 iframe / iOS 无 orientation API 时不派发事件 → 静默降级为仅按钮+轻点入口。
-  // 2026-08-05：若用户后续手动旋转到横屏使 native 成功, 关闭 CSS 旋转兜底, 避免双重旋转错位。
-  useEffect(() => {
-    const isLandscapeOrientation = () => {
-      const ori = (screen as { orientation?: { type?: string } }).orientation?.type;
-      if (!ori) return false;
-      return ori.startsWith('landscape');
-    };
-    const onOrientationChange = () => {
-      // 旋转为横屏且当前非全屏 → 进入; 旋转为竖屏且在全屏 → 退出
-      if (isLandscapeOrientation()) {
-        // 物理上已是横屏 → native lock 实际生效, 关闭 CSS 兜底避免视觉双重旋转
-        setForceLandscape(false);
-        console.log('[landscape-debug] physical landscape detected, forceLandscape = false');
-        if (!isFullscreenElement()) void enterLandscape();
-      } else {
-        if (isFullscreenElement()) void exitLandscape();
-      }
-    };
-    const ori = (screen as { orientation?: ScreenOrientation }).orientation;
-    if (ori && typeof ori.addEventListener === 'function') {
-      ori.addEventListener('change', onOrientationChange);
-      window.addEventListener('orientationchange', onOrientationChange);
-    }
-    return () => {
-      if (ori && typeof ori.removeEventListener === 'function') {
-        ori.removeEventListener('change', onOrientationChange);
-      }
-      window.removeEventListener('orientationchange', onOrientationChange);
-    };
-  }, [enterLandscape, exitLandscape]);
+  // 图表区横屏观看 — 逻辑封装在 useLandscapeFullscreen (iOS Safari / Quark / WebView 兼容),
+  // 经重命名别名保持下方引用不变。
+  const {
+    wrapRef: chartWrapRef,
+    isFullscreen: isChartFullscreen,
+    enterLandscape,
+    exitLandscape,
+    toggleFullscreen,
+  } = useLandscapeFullscreen();
 
   // 2026-08-05：图表内触屏切换副图入口的专用通道 — 设置 __mobileLowerTap 标志,
   // ChartPanel 据此区分入口: 触屏切换不重置主图缩放/不重绘叠加指标; 设置面板入口不受影响。
@@ -436,10 +286,7 @@ export default function MobileLayout(props: MobileLayoutProps) {
 
   return (
     <MobileShell
-      className={[
-        isChartFullscreen ? 'is-chart-fullscreen' : '',
-        forceLandscape ? 'force-landscape' : '',
-      ].filter(Boolean).join(' ')}
+      className={isChartFullscreen ? 'is-chart-fullscreen' : ''}
     >
       {!isChartFullscreen && (
         <MobileTopBar

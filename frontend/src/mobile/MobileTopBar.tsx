@@ -22,7 +22,7 @@ interface MobileTopBarProps {
 
 /** 移动端顶部导航 (44px 高, 含安全区适配) */
 export function MobileTopBar({ instrument, onBack, onFullscreen, onSearch, onTitleClick, onRefresh, refreshing }: MobileTopBarProps) {
-  const { lang } = useI18n();
+  const { lang, setLang } = useI18n();
   const main = instrument?.name ?? '—';
   const sub = instrument ? (lang === 'en' ? instrument.code : secondaryName(instrument.code, lang)) : '';
 
@@ -33,6 +33,27 @@ export function MobileTopBar({ instrument, onBack, onFullscreen, onSearch, onTit
         {sub && <div className="mobile-topbar-sub">{sub}</div>}
         <DownOutlined className="mobile-topbar-title-caret" />
       </button>
+      {/* 2026-08-10: 开放语言切换 — 与 PC 工具栏 lang-group 行为一致, 紧凑三按钮放在刷新按钮左侧 */}
+      <div className="mobile-topbar-lang-group" role="group" aria-label="Language">
+        <button
+          type="button"
+          className={`mobile-lang-btn ${lang === 'en' ? 'active' : ''}`}
+          onClick={() => setLang('en')}
+          aria-pressed={lang === 'en'}
+        >EN</button>
+        <button
+          type="button"
+          className={`mobile-lang-btn ${lang === 'tc' ? 'active' : ''}`}
+          onClick={() => setLang('tc')}
+          aria-pressed={lang === 'tc'}
+        >繁</button>
+        <button
+          type="button"
+          className={`mobile-lang-btn ${lang === 'sc' ? 'active' : ''}`}
+          onClick={() => setLang('sc')}
+          aria-pressed={lang === 'sc'}
+        >简</button>
+      </div>
       {/* 2026-08-05：手动刷新按钮 — 断线补数据 / 加载失败重试 */}
       {onRefresh && (
         <div className="mobile-topbar-actions">
