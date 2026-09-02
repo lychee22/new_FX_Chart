@@ -1,0 +1,106 @@
+// 移动端横屏全屏画线会话状态机
+// 2026-09-01：
+//   封装"抽屉开关 / 全局显隐 / 退出全屏清理"等会话级状态与副作用。
+//   MobileLayout 只接线，不直接持有状态。
+//   - 退出全屏（按钮或物理旋转）→ 自动 finishDrawing
+//   - 抽屉开启时刻强制 tool=NONE（防止旧的 PC 工具残留）
+//   - 切换 onToolChange 时自动派发 chart:cancel-drawing 让 ChartPanel 同步 DrawingManager
+
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { TOOL } from '../drawing/tools';
+
+export interface MobileDrawingSessionApi {
+  /** 抽屉是否打开（与 isFullscreen 解耦，由各自控制） */
+  drawerOpen: boolean;
+  /** 已画线条全局显隐 */
+  drawingsVisible: boolean;
+  /** 切换抽屉开关（首次打开强制 tool=NONE） */
+  toggleDrawer: () => void;
+  /** 关闭抽屉：tool=NONE + 派发 cancel-drawing；isFullscreen 不变 */
+  closeDrawer: () => void;
+  /** 切换显隐 */
+  toggleVisible: () => void;
+  /** 完成画线 = 关闭抽屉 + tool=NONE + 取消进行中绘制 */
+  finishDrawing: () => void;
+  /** 抽屉打开时强制设置 tool，传给 ChartPanel；NONE 时派发 cancel-drawing */
+  setTool: (tool: number) => void;
+}
+
+/**
+ * @param isFullscreen 横屏全屏状态（由 useLandscapeFullscreen 提供）
+ * @param currentTool  App 的当前 tool（用于在抽屉打开时感知外部变化）
+ * @param onToolChange 父组件的 setTool（App 提供）
+ */
+export function useMobileDrawingSession(
+  isFullscreen: boolean,
+  currentTool: number,
+  onToolChange: (tool: number) => void,
+): MobileDrawingSessionApi {
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [drawingsVisible, setDrawingsVisible] = useState(true);
+
+  // 抽屉打开过的标记：仅在"曾经打开→关闭"时触发取消进行中绘制，避免首次挂载误取消。
+  const drawerOpenedRef = useRef(false);
+
+  const cancelDrawing = useCallback(() => {
+    window.dispatchEvent(new CustomEvent('chart:cancel-drawing'));
+  }, []);
+
+  const setTool: MobileDrawingSessionApi['setTool'] = useCallback((tool) => {
+    onToolChange(tool);
+    if (tool === TOOL.NONE) cancelDrawing();
+  }, [onToolChange, cancelDrawing]);
+
+  const closeDrawer = useCallback(() => {
+    setDrawerOpen(false);
+    drawerOpenedRef.current = true;
+    // 关闭抽屉即重置工具与进行中点（用户可能在中途切换了工具）
+    if (currentTool !== TOOL.NONE) onToolChange(TOOL.NONE);
+    cancelDrawing();
+  }, [currentTool, onToolChange, cancelDrawing]);
+
+  const finishDrawing = useCallback(() => {
+    closeDrawer();
+    // 重置显隐为 true（下次进入全屏默认显示已画线条）
+    setDrawingsVisible(true);
+  }, [closeDrawer]);
+
+  const toggleDrawer = useCallback(() => {
+    if (drawerOpen) {
+      closeDrawer();
+    } else {
+      setDrawerOpen(true);
+      drawerOpenedRef.current = true;
+      // 首次打开抽屉时，强制重置工具为 NONE（防 PC 残留 tool 或上次关闭时的中间态）
+      if (currentTool !== TOOL.NONE) onToolChange(TOOL.NONE);
+      cancelDrawing();
+    }
+  }, [drawerOpen, closeDrawer, currentTool, onToolChange, cancelDrawing]);
+
+  const toggleVisible = useCallback(() => {
+    setDrawingsVisible((v) => !v);
+  }, []);
+
+  // 退出全屏（按钮退出或物理旋转退出）→ 自动收抽屉
+  useEffect(() => {
+    if (!isFullscreen) {
+      // 仅在抽屉曾经打开过的情况下触发，避免挂载时的初始 false 误触
+      if (drawerOpenedRef.current && drawerOpen) {
+        closeDrawer();
+      }
+      // 退出全屏时同步重置显隐标志为默认值），不影响下次打开
+    }
+    // 抽屉打开中切到非全屏（罕见，可能是物理旋转）：必须收抽屉
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isFullscreen]);
+
+  return {
+    drawerOpen,
+    drawingsVisible,
+    toggleDrawer,
+    closeDrawer,
+    toggleVisible,
+    finishDrawing,
+    setTool,
+  };
+}

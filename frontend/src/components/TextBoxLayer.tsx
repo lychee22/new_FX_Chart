@@ -36,6 +36,8 @@ interface Props {
   onCommit: (index: number, text: string) => void;
   onMove: (index: number, time: Time, price: number) => void;
   placeholder: string;
+  /** 2026-09-01：移动端全局显隐开关。false 时整层 display:none（与 canvas 画线同步）。默认 true。 */
+  visible?: boolean;
 }
 
 const DRAG_THRESHOLD = 3; // px
@@ -127,6 +129,8 @@ export default function TextBoxLayer(props: Props) {
   }, [editingIndex]);
 
   if (!chart || !series) return null;
+  // 2026-09-01：移动端全局显隐 — 与 canvas 画线同步切换
+  if (props.visible === false) return null;
 
   return (
     <div

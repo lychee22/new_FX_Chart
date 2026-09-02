@@ -83,6 +83,8 @@ class DrawingRenderer implements IPrimitivePaneRenderer {
   draw(target: any): void {
     const m = this.mgr;
     if (!m.chart || !m.series) return;
+    // 2026-09-01：移动端全局显隐 — false 时跳过所有对象（含选中锚点、预览）。
+    if (!m.visible) return;
     const ts = m.chart.timeScale();
 
     target.useBitmapCoordinateSpace((space: any) => {
@@ -91,8 +93,12 @@ class DrawingRenderer implements IPrimitivePaneRenderer {
       ctx.scale(space.horizontalPixelRatio, space.verticalPixelRatio);
 
       const drawAll = (objects: DrawObject[]) => {
-        for (const obj of objects) {
+        for (let i = 0; i < objects.length; i++) {
+          const obj = objects[i];
           this.drawObject(ctx, ts, obj);
+          // 2026-09-01：选中态绘制锚点小圆点 — 仅对真实 objects (m.objects) 的选中项。
+          // m.preview 是绘制过程中未提交的预览对象，无下标概念，不参与选中渲染。
+          if (m.selected === i) this.drawAnchors(ctx, ts, obj);
         }
       };
 
@@ -104,6 +110,41 @@ class DrawingRenderer implements IPrimitivePaneRenderer {
 
       ctx.restore();
     });
+  }
+
+  /**
+   * 2026-09-01：绘制选中对象的锚点小圆点。
+   * TradingView 风格：白色填充 + 深色描边，直径 10px。
+   * 各类型对象的锚点定义：
+   *   - TrendLine / FibRet：t1/p1, t2/p2
+   *   - ParallelChannel：t1/p1, t2/p2, t3/p3
+   */
+  private drawAnchors(ctx: CanvasRenderingContext2D, ts: any, obj: DrawObject): void {
+    const m = this.mgr;
+    if (!m.series) return;
+    const anchors: Array<{ t: Time; p: number }> = [];
+    if (obj.type === TOOL.TRENDLINE || obj.type === TOOL.FIBON_RET) {
+      anchors.push({ t: obj.t1, p: obj.p1 }, { t: obj.t2, p: obj.p2 });
+    } else if (obj.type === TOOL.PARALLEL_CHANNEL) {
+      anchors.push({ t: obj.t1, p: obj.p1 }, { t: obj.t2, p: obj.p2 }, { t: obj.t3, p: obj.p3 });
+    } else {
+      return;
+    }
+    const fill = '#ffffff';
+    const stroke = '#1f2937';
+    const r = 5;
+    for (const a of anchors) {
+      const x = ts.timeToCoordinate(a.t);
+      const y = m.series.priceToCoordinate(a.p);
+      if (x === null || y === null) continue;
+      ctx.beginPath();
+      ctx.arc(x as number, y as number, r, 0, Math.PI * 2);
+      ctx.fillStyle = fill;
+      ctx.fill();
+      ctx.lineWidth = 1.5;
+      ctx.strokeStyle = stroke;
+      ctx.stroke();
+    }
   }
 
   private drawObject(ctx: CanvasRenderingContext2D, ts: any, obj: DrawObject): void {
@@ -311,6 +352,11 @@ export class DrawingManager implements ISeriesPrimitive<Time> {
   preview: DrawObject | null = null;
   decimals = 2;
 
+  // 2026-09-01：移动端全局显隐 + 选中态 — 全局显隐用于抽屉中的"隐藏/显示画线"开关；
+  // 选中态用于移动端点选已画对象显示锚点 + 悬浮删除按钮。
+  visible: boolean = true;
+  selected: number | null = null;
+
   // 交互状态机
   private activeTool: number = TOOL.NONE;
   private clickStage = 0;          // 当前点击阶段 (0/1/2)
@@ -383,6 +429,8 @@ export class DrawingManager implements ISeriesPrimitive<Time> {
     this.preview = null;
     this.clickStage = 0;
     this.pendingParallelBase = null;
+    // 2026-09-01：清除全部时同步清选中态
+    this.selected = null;
     this.redraw();
     if (hadTextBox) this.notifyTextBoxesChanged();
     return true;
@@ -578,6 +626,168 @@ export class DrawingManager implements ISeriesPrimitive<Time> {
       }
       this.redraw();
     }
+  }
+
+  /**
+   * 2026-09-01：移动端全局显隐开关。false 时渲染器跳过所有对象，含选中锚点。
+   * 不影响 objects 数组本身 — 抽屉关闭后再打开可恢复显示。
+   */
+  setVisible(v: boolean): void {
+    if (this.visible === v) return;
+    this.visible = v;
+    this.redraw();
+  }
+
+  /**
+   * 2026-09-01：选中态切换。传入 null 取消选中。
+   * 选中由渲染器在已有 objects 之上叠加锚点绘制，不修改 objects。
+   */
+  selectObject(index: number | null): void {
+    if (this.selected === index) return;
+    this.selected = index;
+    this.redraw();
+  }
+
+  /**
+   * 2026-09-01：按下标删除任意对象。
+   * 与 undoLast 类似，但允许按任意下标删除，并同步选中态：
+   *   - 删除后若 selected >= 删除点下标，selected--，否则 selected=deleted 失效则置 null
+   *   - TextBox 被删时通知监听器
+   */
+  deleteObject(index: number): boolean {
+    const obj = this.objects[index];
+    if (!obj) return false;
+    this.objects.splice(index, 1);
+    // 选中态同步：删除点之前的下标不受影响；删除点及其后下标需前移 1
+    if (this.selected !== null) {
+      if (index === this.selected) this.selected = null;
+      else if (this.selected > index) this.selected = this.selected - 1;
+    }
+    if (obj.type === TOOL.TEXTBOX) this.notifyTextBoxesChanged();
+    this.redraw();
+    return true;
+  }
+
+  /**
+   * 2026-09-01：屏幕坐标 (px, py) 命中测试，返回 m.objects 中命中的下标或 null。
+   * 仅在主图可见区域内检测，按"后绘制的优先"顺序匹配。
+   * 距离阈值 threshold=12 px；通道对象额外支持填充区内命中。
+   */
+  hitTestObject(px: number, py: number, threshold = 12): number | null {
+    if (!this.chart || !this.series) return null;
+    const ts = this.chart.timeScale();
+    // 从后往前匹配（最后绘制的在最上层，优先被选中）
+    for (let i = this.objects.length - 1; i >= 0; i--) {
+      const obj = this.objects[i];
+      if (this.hitTestSingle(obj, px, py, threshold, ts)) return i;
+    }
+    return null;
+  }
+
+  private hitTestSingle(obj: DrawObject, px: number, py: number, threshold: number, ts: any): boolean {
+    if (!this.series) return false;
+    const xy = (t: Time, p: number): [number, number] | null => {
+      const x = ts.timeToCoordinate(t);
+      const y = this.series!.priceToCoordinate(p);
+      if (x === null || y === null) return null;
+      return [x as number, y as number];
+    };
+    // 点到线段距离
+    const segDist = (a: [number, number], b: [number, number]): number => {
+      const [x1, y1] = a, [x2, y2] = b;
+      const dx = x2 - x1, dy = y2 - y1;
+      const len2 = dx * dx + dy * dy;
+      let t = len2 === 0 ? 0 : ((px - x1) * dx + (py - y1) * dy) / len2;
+      t = Math.max(0, Math.min(1, t));
+      const cx = x1 + t * dx, cy = y1 + t * dy;
+      return Math.hypot(px - cx, py - cy);
+    };
+    // 点到水平线段距离 (y 坐标固定，x 在区间内)
+    const horizSegDist = (yLine: number, x1: number, x2: number): number => {
+      const cx = Math.max(Math.min(px, x2), x1);
+      return Math.hypot(px - cx, py - yLine);
+    };
+
+    if (obj.type === TOOL.TRENDLINE) {
+      const a = xy(obj.t1, obj.p1), b = xy(obj.t2, obj.p2);
+      if (!a || !b) return false;
+      return segDist(a, b) <= threshold;
+    }
+    if (obj.type === TOOL.PARALLEL_CHANNEL) {
+      // 命中两条边线（基线与平移后的第二条）+ 平行四边形填充区
+      const a = xy(obj.t1, obj.p1), b = xy(obj.t2, obj.p2);
+      const p3 = xy(obj.t3, obj.p3);
+      if (!a || !b || !p3) return false;
+      // 计算平移后的第二条线端点（与 drawParallelChannel 一致算法）
+      const t1n = obj.t1 as number, t2n = obj.t2 as number, t3n = obj.t3 as number;
+      const dt = t2n - t1n;
+      const ratio = dt !== 0 ? (t3n - t1n) / dt : 0;
+      const baseP3 = obj.p1 + (obj.p2 - obj.p1) * ratio;
+      const priceOffset = obj.p3 - baseP3;
+      const p1Top = this.series.priceToCoordinate(obj.p1 + priceOffset);
+      const p2Top = this.series.priceToCoordinate(obj.p2 + priceOffset);
+      if (p1Top === null || p2Top === null) return false;
+      const c: [number, number] = [a[0], p1Top as number];
+      const d: [number, number] = [b[0], p2Top as number];
+      // 1) 边线命中
+      if (segDist(a, b) <= threshold) return true;
+      if (segDist(c, d) <= threshold) return true;
+      // 2) 填充区命中 (平行四边形点 in polygon)
+      const inPoly = (P: [number, number], A: [number, number], B: [number, number],
+                     C: [number, number], D: [number, number]): boolean => {
+        const sign = (p1: [number, number], p2: [number, number], p3: [number, number]) =>
+          (p1[0] - p3[0]) * (p2[1] - p3[1]) - (p2[0] - p3[0]) * (p1[1] - p3[1]);
+        const d1 = sign(P, A, B), d2 = sign(P, B, C), d3 = sign(P, C, D), d4 = sign(P, D, A);
+        const hasNeg = (d1 < 0) || (d2 < 0) || (d3 < 0) || (d4 < 0);
+        const hasPos = (d1 > 0) || (d2 > 0) || (d3 > 0) || (d4 > 0);
+        return !(hasNeg && hasPos);
+      };
+      return inPoly([px, py], a, b, c, d);
+    }
+    if (obj.type === TOOL.FIBON_RET) {
+      const start = obj.p1, end = obj.p2;
+      const sign = start > end ? 1 : -1;
+      const diff = Math.abs(start - end);
+      const xStart = ts.timeToCoordinate(obj.t1);
+      const xEnd = ts.timeToCoordinate(obj.t2);
+      if (xStart === null || xEnd === null) return false;
+      // 各 ratio 水平线段检测
+      for (const ratio of FIB_RE_RATIOS) {
+        const price = sign * diff * ratio + end;
+        const y = this.series.priceToCoordinate(price);
+        if (y === null) continue;
+        if (horizSegDist(y as number, xStart as number, xEnd as number) <= threshold) return true;
+      }
+      return false;
+    }
+    // 其他类型（文本框/平行线等）暂不参与单条删除：文本框用现有 Layer；平行线工具未在移动端抽屉暴露
+    return false;
+  }
+
+  /**
+   * 2026-09-01：当前工具定点进度。返回 { tool, placed, total } 或 null（无工具/工具无需定点）。
+   * 用于移动端顶部持续分步提示条：
+   *   趋势线 (2 点): "请点击放置起点 (0/2)" / "点击放置终点 (1/2)" / "已完成"
+   *   平行通道 (3 点): "请点击放置起点 (0/3)" / "点击确定第一条线的位置 (1/3)" / "点击确定通道线的宽度 (2/3)"
+   *   斐波那契回调 (2 点): "请点击放置起点 (0/2)" / "点击确定回调终点 (1/2)"
+   * NONE 工具或点击阶段已满（clickStage=0 但 pendingPoints.length=0 完成态）时返回 null。
+   */
+  getDrawProgress(): { tool: number; placed: number; total: number } | null {
+    if (this.activeTool === TOOL.NONE) return null;
+    const total =
+      this.activeTool === TOOL.TRENDLINE ? 2 :
+      this.activeTool === TOOL.PARALLEL_CHANNEL ? 3 :
+      this.activeTool === TOOL.PARALLEL_LINE ? 3 :
+      this.activeTool === TOOL.FIBON_RET ? 2 :
+      this.activeTool === TOOL.FIBON_PRO ? 3 :
+      this.activeTool === TOOL.TEXTBOX ? 1 :
+      0;
+    if (total === 0) return null;
+    // PARALLEL_LINE 三击 (其中第二击建立 pendingParallelBase) — 按用户视角统一为 3 点进度
+    const placed = this.pendingPoints.length;
+    // 若 placed 已达 total，表示该对象已提交 — 返回 null 让上层展示"已完成"逻辑
+    if (placed >= total) return null;
+    return { tool: this.activeTool, placed, total };
   }
 
   /**

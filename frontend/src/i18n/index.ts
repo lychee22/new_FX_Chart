@@ -60,6 +60,11 @@ export const STRINGS = {
     ExitFullscreen: 'Exit Fullscreen',
     // 2026-08-05：横屏全屏模式提示 (全屏时常驻显示, 提示用户当前状态 + 退出方式)
     RotateDeviceHint: 'Rotate device for landscape mode · tap to exit',
+    // 2026-09-01：移动端横屏画线抽屉
+    DrawTools: 'Draw', StraightLine: 'Trend Line', ChannelLine: 'Parallel Channel',
+    GoldenSection: 'Fibonacci', DeleteAllDrawings: 'Delete All',
+    HideDrawings: 'Hide Drawings', ShowDrawings: 'Show Drawings',
+    FinishDrawing: 'Done',
   },
   tc: {
     chart: '圖表',
@@ -107,6 +112,11 @@ export const STRINGS = {
     ExitFullscreen: '退出全屏',
     // 2026-08-05：橫屏全屏模式提示 (全屏時常駐顯示, 提示用戶當前狀態 + 退出方式)
     RotateDeviceHint: '請旋轉裝置進入橫屏 · 點擊退出',
+    // 2026-09-01：移動端橫屏畫線抽屜
+    DrawTools: '畫線', StraightLine: '直線', ChannelLine: '平行通道',
+    GoldenSection: '黃金比例', DeleteAllDrawings: '全部刪除',
+    HideDrawings: '隱藏畫線', ShowDrawings: '顯示畫線',
+    FinishDrawing: '完成畫線',
   },
   sc: {
     chart: '图表',
@@ -154,6 +164,11 @@ export const STRINGS = {
     ExitFullscreen: '退出全屏',
     // 2026-08-05：横屏全屏模式提示 (全屏时常驻显示, 提示用户当前状态 + 退出方式)
     RotateDeviceHint: '请旋转设备进入横屏 · 点击退出',
+    // 2026-09-01：移动端横屏画线抽屉
+    DrawTools: '画线', StraightLine: '直线', ChannelLine: '平行通道',
+    GoldenSection: '黄金比例', DeleteAllDrawings: '全部删除',
+    HideDrawings: '隐藏画线', ShowDrawings: '显示画线',
+    FinishDrawing: '完成画线',
   },
 } as const;
 

@@ -124,6 +124,8 @@ import { DrawingManager } from '../drawing/DrawingManager';
 import { TOOL } from '../drawing/tools';
 import { useI18n } from '../i18n';
 import TextBoxLayer, { type TextBoxEntry } from './TextBoxLayer';
+import { useChartDrawInteraction } from '../mobile/useChartDrawInteraction';
+import { MobileDrawOverlays } from '../mobile/MobileDrawOverlays';
 
 interface ChartPanelProps {
   code: string;
@@ -170,6 +172,10 @@ interface ChartPanelProps {
   onCycleLower?: () => void;
   /** 2026-08-06：刷新进行状态上报 (手动刷新/WS 重连重拉期间 true) — 驱动工具栏/顶栏刷新按钮转圈 */
   onRefreshingChange?: (refreshing: boolean) => void;
+  /** 2026-09-01：移动端横屏画线模式 (抽屉是否打开)。true 时启用 tap 定点/选中交互 */
+  mobileDrawMode?: boolean;
+  /** 2026-09-01：已画线条全局显隐 (来自抽屉的"隐藏/显示画线"开关) */
+  drawingsVisible?: boolean;
 }
 
 // 2026-08-06：首屏 loading 最小时长 — 原为 3s 演示用, 效果确认后归零 (仅首次加载, 切换品种不显示)。
@@ -284,6 +290,19 @@ export default function ChartPanel(props: ChartPanelProps) {
   // 保证任意时刻只有一条添加链在跑，杜绝并发链 paneIndex 撞车
   const lowerApplyVersionRef = useRef(0);
   const { t } = useI18n();
+
+  // 2026-09-01：移动端画线交互 hook — tap 定点 / 选中已画对象 / 步骤提示 / 完成提示。
+  // hook 内部依赖 refs (drawingMgrRef/chartRef/mainSeriesRef/containerRef) + paneRects + props。
+  // 返回 selected/stepHint/deleteSelected 直接驱动 MobileDrawOverlays 浮层。
+  // 移动端 tap 闭环接入见 onChartPointerUp 内的 hook 调用。
+  const drawInteraction = useChartDrawInteraction({
+    drawingMgrRef, chartRef, containerRef, mainSeriesRef, paneRects,
+    mobileDrawMode: props.mobileDrawMode === true,
+    tool: props.tool,
+    onToolChange: props.onToolChange,
+    onLimitReached: () => { message.warning(t('LimitReached')); },
+    onDrawDone: () => { /* 'done' 提示由 hook 内置 2s 自动消失, 无需外层 message */ },
+  });
 
   // ---- 初始化图表 ----
   useEffect(() => {
@@ -681,6 +700,12 @@ export default function ChartPanel(props: ChartPanelProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [props.tool]);
 
+  // 2026-09-01：移动端画线全局显隐 — 同步到 DrawingManager 与 TextBoxLayer。
+  // 默认 true (显示)；抽屉中的"隐藏/显示画线"按钮驱动 props.drawingsVisible 切换。
+  useEffect(() => {
+    drawingMgrRef.current?.setVisible(props.drawingsVisible !== false);
+  }, [props.drawingsVisible]);
+
   // ---- 横屏全屏: 只显示主图 ----
   // 2026-08-04：进入/退出全屏即时重排 pane, 不依赖 resize。
   // 2026-08-05：改为真正隐藏/恢复副图 — 移除 series → 空 pane 自动删除 (主图占满 100%,
@@ -768,7 +793,13 @@ export default function ChartPanel(props: ChartPanelProps) {
     const handler = () => {
       const mgr = drawingMgrRef.current;
       if (!mgr) return;
-      mgr.cancelDrawing();
+      const cancelled = mgr.cancelDrawing();
+      // 移动端"取消"按钮语义: 有进行中的绘制则取消本次, 否则退出当前工具
+      // (等效于重新选择"无工具"), 避免触屏用户无法回到常规浏览状态。
+      if (!cancelled && mgr.getActiveTool() !== TOOL.NONE) {
+        mgr.setTool(TOOL.NONE);
+        props.onToolChange(TOOL.NONE);
+      }
     };
     window.addEventListener('chart:cancel-drawing', handler);
     return () => window.removeEventListener('chart:cancel-drawing', handler);
@@ -1950,23 +1981,17 @@ export default function ChartPanel(props: ChartPanelProps) {
     return price;
   };
 
-  // ---- 点击 → 绘图工具 ----
-  const handleChartClick = (param: MouseEventParams<Time>) => {
-    // 2026-07-31：副图点击不消费 — 绘图工具只工作在主图 (paneIndex === 0)。
-    // 旧代码没读 param.paneIndex，副图点击会通过 mainSeriesRef.current.coordinateToPrice
-    // 把副图 Y 坐标错误映射到主图价格轴，导致在主图上画出"鬼线"。
-    // TradingView 规范：绘图工具绑定主图，副图事件应直接 return。
-    if(param.paneIndex == undefined || param.paneIndex !== 0) return;
-    if (!param.time || !mainSeriesRef.current) return;
-    const mousePrice = getMousePrice(param);
-    if (mousePrice === null) return;
-
-    const mgr = drawingMgrRef.current!;
+  // ---- 点击/触摸落点 → 绘图工具 ----
+  // 2026-08-27：从 handleChartClick 抽出统一落点入口, 供 PC 的库 click 与触屏 pointer
+  // 事件共用, 避免触屏拖动时库 click 不触发导致无法落点。
+  const consumeToolTap = (time: Time, price: number) => {
+    const mgr = drawingMgrRef.current;
+    if (!mgr) return;
     if (mgr.getActiveTool() === TOOL.TEXTBOX) {
-      // 2026-07-27：直接创建一个空文字框并进入编辑态，不再弹 prompt
-      // 2026-07-31：创建后退出文字框工具，每次新增需重新选择 工具→文本框
+      // 2026-07-27：直接创建一个空文字框并进入编辑态, 不再弹 prompt
+      // 2026-07-31：创建后退出文字框工具, 每次新增需重新选择 工具→文本框
       // 2026-07-31：addTextBox 返回 -1 表示 TEXTBOX 已达上限 (5)
-      const idx = mgr.addTextBox(param.time, mousePrice, '');
+      const idx = mgr.addTextBox(time, price, '');
       if (idx < 0) {
         message.warning(t('LimitReached'));
         mgr.setTool(TOOL.NONE);
@@ -1979,7 +2004,7 @@ export default function ChartPanel(props: ChartPanelProps) {
       props.onToolChange(TOOL.NONE);
     } else {
       // 2026-07-31：handleClick 返回 'limit' 表示该类已达上限 — 提示并切回 NONE
-      const r = mgr.handleClick(param.time, mousePrice);
+      const r = mgr.handleClick(time, price);
       if (r === 'limit') {
         message.warning(t('LimitReached'));
         mgr.setTool(TOOL.NONE);
@@ -1987,15 +2012,31 @@ export default function ChartPanel(props: ChartPanelProps) {
       }
     }
   };
+
+  // PC 鼠标路径: 库 click → 绘图工具。移动端触屏绘图完全由 pointer 事件驱动
+  // (库的 click 在拖动时不触发, 且会与 pointerdown/up 双落点), 直接跳过。
+  const handleChartClick = (param: MouseEventParams<Time>) => {
+    if (props.mobile === true) return;
+    // 2026-07-31：副图点击不消费 — 绘图工具只工作在主图 (paneIndex === 0)。
+    // 旧代码没读 param.paneIndex，副图点击会通过 mainSeriesRef.current.coordinateToPrice
+    // 把副图 Y 坐标错误映射到主图价格轴，导致在主图上画出"鬼线"。
+    // TradingView 规范：绘图工具绑定主图，副图事件应直接 return。
+    if(param.paneIndex == undefined || param.paneIndex !== 0) return;
+    if (!param.time || !mainSeriesRef.current) return;
+    const mousePrice = getMousePrice(param);
+    if (mousePrice === null) return;
+    consumeToolTap(param.time, mousePrice);
+  };
   // 2026-08-05：每次渲染镜像最新函数 — 挂载期订阅经由 ref 调用, 确保读到最新 t
   handleChartClickRef.current = handleChartClick;
 
   // ---- 工具提示 ----
   const updateToolHint = (tool: number) => {
-    const cancelHint = ` · ${t('RightClickCancel')}`;
+    // 移动端无右键, 取消通过浮层上的"取消"按钮完成; PC 端保留右键取消提示。
+    const cancelHint = props.mobile ? '' : ` · ${t('RightClickCancel')}`;
     if (tool === TOOL.TRENDLINE) setToolHint(`${t('DrawLine')}: ${t('chart')} → 2 ${'points'}${cancelHint}`);
     else if (tool === TOOL.PARALLEL_LINE) setToolHint(`${t('ParallelLines')}: 3 ${'points'}${cancelHint}`);
-    // else if (tool === TOOL.PARALLEL_CHANNEL) setToolHint(`${t('ParallelChannel')}: 3 ${'points'}${cancelHint}`);
+    else if (tool === TOOL.PARALLEL_CHANNEL) setToolHint(`${t('ParallelChannel')}: 3 ${'points'}${cancelHint}`);
     else if (tool === TOOL.FIBON_RET) setToolHint(`${t('FibRetracement')}: 2 ${'points'}${cancelHint}`);
     else if (tool === TOOL.FIBON_PRO) setToolHint(`${t('FibProjection')}: 3 ${'points'}${cancelHint}`);
     else setToolHint('');
@@ -2121,6 +2162,13 @@ export default function ChartPanel(props: ChartPanelProps) {
     const rect = el.getBoundingClientRect();
     const localX = clientX - rect.left;
     const localY = clientY - rect.top;
+    // 2026-08-27：触屏绘制仅映射主图 pane (与 PC click 的 paneIndex===0 语义一致),
+    // 主图区域外的触摸不产生有效落点, 避免误画到副图。
+    const mainRect = paneRects[0];
+    if (mainRect && mainRect.height > 0 &&
+        (localY < mainRect.top || localY > mainRect.top + mainRect.height)) {
+      return null;
+    }
     const time = chart.timeScale().coordinateToTime(localX) as Time | null;
     const price = series.coordinateToPrice(localY);
     if (time === null || price === null || !Number.isFinite(price)) return null;
@@ -2242,6 +2290,12 @@ export default function ChartPanel(props: ChartPanelProps) {
     // 鼠标仍完全沿用 lightweight-charts 原生路径；绘图工具需要立即接收触摸位置。
     if (e.pointerType === 'mouse' || props.tool !== TOOL.NONE) {
       onChartPointerMove(e);
+      // 2026-08-27：触屏绘图 — 库的 click 在拖动时不触发, 因此以 pointerdown 落点
+      // (两点工具起点 / 三点工具各点), pointerup 再补两点工具的终点。
+      if (e.pointerType !== 'mouse' && props.tool !== TOOL.NONE) {
+        const tp = clientToTimePrice(e.clientX, e.clientY);
+        if (tp) consumeToolTap(tp.time, tp.price);
+      }
       return;
     }
 
@@ -2281,10 +2335,26 @@ export default function ChartPanel(props: ChartPanelProps) {
       e.stopPropagation();
       return;
     }
+    // 2026-09-01：移动端画线模式 (抽屉打开) — 优先走 hook 的纯 tap 定点/选中闭环，
+    // 避免与下方"绘图工具拖动补点"逻辑并存 (那套是早期触屏绘制的过渡实现，
+    // 在移动端画线模式下与"tap=单次定点"语义冲突)。
+    if (drawInteraction.handleDrawPointerUp(e, start)) return;
+    // 2026-08-27：绘图工具激活 — 触屏绘制不依赖库 click (拖动不触发), 由 pointer 闭环。
+    if (props.tool !== TOOL.NONE) {
+      if (e.pointerType !== 'mouse') {
+        const activeTool = drawingMgrRef.current?.getActiveTool();
+        const dragged = Math.hypot(e.clientX - start.x, e.clientY - start.y) > LOWER_TAP_THRESHOLD;
+        // 两点工具 (趋势线/斐波那契回调): "按下-拖动-松开"一气呵成, 松开作为第二点;
+        // 三点工具每个点已在 pointerdown 落点, 此处不再追加, 避免对象创建后多落一点。
+        if (dragged && (activeTool === TOOL.TRENDLINE || activeTool === TOOL.FIBON_RET)) {
+          const tp = clientToTimePrice(e.clientX, e.clientY);
+          if (tp) consumeToolTap(tp.time, tp.price);
+        }
+      }
+      return;
+    }
     // 位移超阈值 = 拖动/平移, 不切换
     if (Math.hypot(e.clientX - start.x, e.clientY - start.y) > LOWER_TAP_THRESHOLD) return;
-    // 绘图工具激活时不切换 (画线交互优先)
-    if (props.tool !== TOOL.NONE) return;
     // 2026-08-05：全屏时副图 pane 已被隐藏 (无副图可点), 点击应走"单击退出全屏"
     if (fullscreenRef.current) return;
     if (!props.onCycleLower) return;
@@ -2320,7 +2390,7 @@ export default function ChartPanel(props: ChartPanelProps) {
 
   return (
     <div
-      className="chart-container"
+      className={`chart-container${props.tool !== TOOL.NONE ? ' chart-tool-active' : ''}`}
       ref={containerRef}
       style={chartStyle}
       onPointerDown={onChartPointerDown}
@@ -2338,7 +2408,24 @@ export default function ChartPanel(props: ChartPanelProps) {
     >
       {info && <div className="info-overlay" dangerouslySetInnerHTML={{ __html: info}} />}
       {/* 触屏路径：库原生 vertLine/horzLine + info 浮层 (scheduleHide 3 秒后调 clearCrosshairPosition 隐藏) */}
-      <div className={`tools-hint ${toolHint ? 'show' : ''}`}>{toolHint}</div>
+      <div className={`tools-hint ${toolHint ? 'show' : ''}`}>
+        {toolHint}
+        {/* 2026-08-27：移动端无右键, 提供触摸友好的"取消"按钮 (PC 端仍走右键, 保持零变化) */}
+        {toolHint && props.mobile === true && (
+          <button
+            type="button"
+            className="tools-hint-cancel"
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={(e) => {
+              e.stopPropagation();
+              window.dispatchEvent(new CustomEvent('chart:cancel-drawing'));
+            }}
+            aria-label={t('CancelDraw')}
+          >
+            {t('CancelDraw')}
+          </button>
+        )}
+      </div>
       {/* 2026-07-29：副图标题浮层 — 移动端由 CSS @media 隐藏 */}
       {props.lower.map((tech, idx) => {
         const paneIdx = idx + 1;
@@ -2444,7 +2531,16 @@ export default function ChartPanel(props: ChartPanelProps) {
         onMove={(idx, time, price) => {
           drawingMgrRef.current?.moveTextBox(idx, time, price);
         }}
+        visible={props.drawingsVisible !== false}
       />
+      {/* 2026-09-01：移动端画线浮层 — 顶部持续步骤提示条 + 中下方悬浮删除按钮 (仅在画线模式时) */}
+      {props.mobileDrawMode === true && (
+        <MobileDrawOverlays
+          stepHint={drawInteraction.stepHint}
+          hasSelected={drawInteraction.selected !== null}
+          onDeleteSelected={drawInteraction.deleteSelected}
+        />
+      )}
       {/* 2026-08-06：首屏加载覆盖层 — 首次进入页面图表数据加载期间显示 (3s 演示时长见 INITIAL_LOADING_MIN_MS) */}
       {initialLoading && (
         <div className="chart-loading-overlay">
