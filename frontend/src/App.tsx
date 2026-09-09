@@ -7,34 +7,19 @@ import { useIsMobile } from './hooks/useIsMobile';
 import { marketApi } from './api/client';
 import { I18nContext, STRINGS, type Lang, type StringKey } from './i18n';
 import type { Instrument } from './types';
-import { INTERVAL, LOWER_TECH, UPPER_TECH } from './types';
-import { DEFAULT_NATION, NATION_PALETTES, type Nation, type NationPalette } from './constants/nation';
+import { INTERVAL, LOWER_TECH,type Nation, type NationPalette, type PcSnapshot } from './types';
 import { defaultParamsFor } from './constants/indicatorParams';
+import { DEFAULT_NATION, NATION_PALETTES } from './constants/chart';
 
 // 2026-08-04：移动端默认副图指标 = 成交量 (需求1: 移动端展示一个默认主图 + 一个默认副图)
 const DEFAULT_MOBILE_LOWER = LOWER_TECH.VOLUME;
 
-// 2026-08-05：PC 配置快照 — 从 PC 切到移动端时暂存, 切回 PC 时恢复
-// (PC 用户的图表配置不因临时切换移动端而丢失)
-interface PcSnapshot {
-  chartType: number;
-  upper: number;
-  upperParams: number[];
-  lower: number[];
-  lowerParams: number[];
-  tool: number;
-}
-
 export default function App() {
-  // ---- 移动端判定 (提前到状态区之前, lower 初始值依赖它) ----
   const isMobile = useIsMobile();
-
-  // ---- 国际化 ----
   const [lang, setLangState] = useState<Lang>('sc');
   const t = useCallback((key: StringKey) => STRINGS[lang][key] ?? STRINGS.en[key] ?? key, [lang]);
   const setLang = useCallback((l: Lang) => setLangState(l), []);
   const i18nValue = useMemo(() => ({ lang, setLang, t }), [lang, setLang, t]);
-
   // ---- 状态 ----
   const [instruments, setInstruments] = useState<Instrument[]>([]);
   const [code, setCode] = useState('JPY');
@@ -51,6 +36,8 @@ export default function App() {
   const [lowerParams, setLowerParams] = useState<number[]>(() => defaultParamsFor('lower', DEFAULT_MOBILE_LOWER));
   // 2026-08-06：刷新进行中 — ChartPanel 经 onRefreshingChange 上报, 驱动工具栏/顶栏刷新按钮转圈
   const [refreshing, setRefreshing] = useState(false);
+  // 2026-09-04：品种列表加载失败标记 — 触发 Toolbar 内联空状态徽标
+  const [instrumentsError, setInstrumentsError] = useState(false);
 
   // 2026-07-31：把同一帧密集触发的多次 toggle 合并为一次 setLower，
   // 避免 ChartPanel.loadLowerIndicators 每次都「清空+重建」造成逐个 pane 闪现
@@ -127,10 +114,9 @@ export default function App() {
   const refreshRef = useRef<() => void>(() => {});
 
   // 2026-07-30：撤销 / 回滚 — 通知 ChartPanel 移除最后一个绘图对象
+  // canUndo 状态由 useChartCommandBus 通过 'chart:can-undo-changed' 事件上报（见下方 useEffect 订阅）
   const undoTickRef = useRef(0);
-  // 撤销后需要刷新 canUndo, 维护一个递增计数器让子组件订阅
   const [canUndo, setCanUndo] = useState(false);
-  const registerCanUndo = useCallback((c: boolean) => setCanUndo(c), []);
   const onUndo = useCallback(() => {
     undoTickRef.current += 1;
     // 通过 CustomEvent 让 ChartPanel 监听 (轻量, 不引入额外 Ref forwarding)
@@ -138,10 +124,15 @@ export default function App() {
   }, []);
 
   // 2026-07-31：清除所有 — 通知 ChartPanel 清空所有已绘制对象
-  // canClear 与 canUndo 状态来源相同 (mgr.canUndo() = objects.length > 0)
-  // 但保留独立 setter 以便未来"清除选中"按钮扩展时使用
+  // canClear 与 canUndo 状态来源相同 (mgr.canUndo() = objects.length > 0)，
+  // 2026-09-09：统一由 'chart:can-undo-changed' 事件驱动（见上方 useEffect 订阅）
   const [canClear, setCanClear] = useState(false);
-  const registerCanClear = useCallback((c: boolean) => setCanClear(c), []);
+
+  // 2026-09-07：每类工具当前已绘数量 (key=TOOL.*, value=count) — 由 ChartPanel 通过
+  // subscribeObjectsChanged 上报。Toolbar 用来在选择受限工具时做上限预检
+  // (与移动端 MobileDrawingDrawer 的预检保持一致, 弹出 LimitReached)。
+  const [drawingCounts, setDrawingCounts] = useState<Record<number, number>>({});
+  const registerDrawingCounts = useCallback((c: Record<number, number>) => setDrawingCounts(c), []);
   const onClearAll = useCallback(() => {
     window.dispatchEvent(new CustomEvent('chart:clear-all'));
   }, []);
@@ -162,6 +153,18 @@ export default function App() {
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [onUndo]);
+
+  // 2026-09-09：订阅 useChartCommandBus 派发的 canUndo/canClear 状态变化事件。
+  // 替代原本 ChartPanel 通过 registerCanUndo/registerCanClear prop 上报的双向耦合。
+  useEffect(() => {
+    const onCanUndoChanged = (e: Event) => {
+      const can = !!(e as CustomEvent<boolean>).detail;
+      setCanUndo(can);
+      setCanClear(can);
+    };
+    window.addEventListener('chart:can-undo-changed', onCanUndoChanged);
+    return () => window.removeEventListener('chart:can-undo-changed', onCanUndoChanged);
+  }, []);
 
   // ---- 移动端判定 (已上移至状态区前, 供 lower 初始值使用) ----
   // 2026-08-04：进入移动端时完全重置图表展示 (需求1):
@@ -223,15 +226,22 @@ export default function App() {
   const palette: NationPalette = NATION_PALETTES[nation];
 
   // ---- 加载品种列表 ----
-  useEffect(() => {
+  // 2026-09-04：抽成 loadInstruments 回调 — Toolbar 的"暂无品种"徽标可直接重试拉取
+  const loadInstruments = useCallback(() => {
+    setInstrumentsError(false);
     marketApi.getInstruments()
-      .then(setInstruments)
+      .then((data) => {
+        setInstruments(data);
+        setInstrumentsError(false);
+      })
       .catch((e) => {
         console.error('加载品种列表失败', e);
         // 2026-08-05：品种列表失败不再静默 (之前只回退 decimals=2, 下拉为空无任何提示)
         message.error(t('LoadFailed'));
+        setInstrumentsError(true);
       });
   }, [t]);
+  useEffect(() => { loadInstruments(); }, [loadInstruments]);
 
   // ---- 更新标题 ----
   useEffect(() => {
@@ -295,40 +305,41 @@ export default function App() {
             registerRefresh={registerRefresh}
             onUndo={onUndo}
             canUndo={canUndo}
-            registerCanUndo={registerCanUndo}
             onClearAll={onClearAll}
             canClear={canClear}
-            registerCanClear={registerCanClear}
           />
         ) : (
           <>
-            <Toolbar
-              instruments={instruments}
-              code={code}
-              interval={interval}
-              chartType={chartType}
-              upper={upper}
-              lower={lower}
-              tool={tool}
-              onCodeChange={setCode}
-              onIntervalChange={setInterval}
-              onChartTypeChange={setChartType}
-              onUpperChange={setUpper}
-              onLowerChange={toggleLower}
-              onToolChange={setTool}
-              onZoomOut={onZoomOut}
-              onZoomIn={onZoomIn}
-              onShiftLeft={onShiftLeft}
-              onShiftRight={onShiftRight}
-              onExport={onExport}
-              onRefresh={onRefresh}
-              refreshing={refreshing}
-              onUndo={onUndo}
-              canUndo={canUndo}
-              canClear={canClear}
-              onClearAll={onClearAll}
-            />
-            <div className="title-bar">{titleText} {t('chart')}</div>
+          <Toolbar
+            instruments={instruments}
+            code={code}
+            interval={interval}
+            chartType={chartType}
+            upper={upper}
+            lower={lower}
+            tool={tool}
+            onCodeChange={setCode}
+            onIntervalChange={setInterval}
+            onChartTypeChange={setChartType}
+            onUpperChange={setUpper}
+            onLowerChange={toggleLower}
+            onToolChange={setTool}
+            onZoomOut={onZoomOut}
+            onZoomIn={onZoomIn}
+            onShiftLeft={onShiftLeft}
+            onShiftRight={onShiftRight}
+            onExport={onExport}
+            onRefresh={onRefresh}
+            refreshing={refreshing}
+            onUndo={onUndo}
+            canUndo={canUndo}
+            canClear={canClear}
+            onClearAll={onClearAll}
+            instrumentsError={instrumentsError}
+            onRetryInstruments={loadInstruments}
+            drawingCounts={drawingCounts}
+          />
+          <div className="title-bar">{titleText} {t('chart')}</div>
             <ChartPanel
               code={code}
               interval={interval}
@@ -339,21 +350,13 @@ export default function App() {
               decimals={decimals}
               palette={palette}
               mobile={isMobile}
-              onZoomOut={onZoomOut}
-              onZoomIn={onZoomIn}
-              onShiftLeft={onShiftLeft}
-              onShiftRight={onShiftRight}
               onReorderLower={reorderLower}
               onRemoveLower={removeLower}
               registerExport={registerExport}
               registerRefresh={registerRefresh}
               onRefreshingChange={setRefreshing}
-              onUndo={onUndo}
-              canUndo={canUndo}
-              registerCanUndo={registerCanUndo}
               onToolChange={setTool}
-              onClearAll={onClearAll}
-              registerCanClear={registerCanClear}
+              registerDrawingCounts={registerDrawingCounts}
             />
           </>
         )}

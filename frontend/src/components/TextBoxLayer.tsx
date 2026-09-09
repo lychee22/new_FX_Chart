@@ -128,6 +128,36 @@ export default function TextBoxLayer(props: Props) {
     }
   }, [editingIndex]);
 
+  // 2026-09-07：编辑态外部点击兜底提交。
+  // 原生 onBlur 在某些浏览器场景（特别是 Chromium/WebKit 下点击原生 <select>
+  // 触发 mousedown）会被抑制，导致工具切换时编辑态卡住、文本丢失。
+  // 这里在 capture 阶段监听 document pointerdown：点击若落在当前编辑框内部
+  // （contentEditable 或外层 wrapper）则忽略，否则主动提交。
+  // 覆盖 Toolbar 下拉/按钮、canvas、其它文字框、空白处等所有切工具/失焦入口。
+  useEffect(() => {
+    if (editingIndex == null) return;
+    const editingIdx = editingIndex;
+
+    const handleDocPointerDown = (e: PointerEvent) => {
+      const target = e.target as Node | null;
+      if (!target) return;
+      const editingEl = contentRefs.current.get(editingIdx);
+      if (!editingEl) return;
+      // 点击在 contentEditable 内部 → 继续输入, 不提交
+      if (editingEl === target || editingEl.contains(target)) return;
+      // 点击在同一文字框 wrapper 内（非内容区, 如拖动起点）→ 不提交
+      const wrapper = editingEl.closest('.lw-textbox');
+      if (wrapper && (wrapper === target || wrapper.contains(target))) return;
+      // 其它任意位置 → 提交当前编辑
+      onCommit(editingIdx, editingEl.innerText.trim());
+    };
+
+    document.addEventListener('pointerdown', handleDocPointerDown, true);
+    return () => {
+      document.removeEventListener('pointerdown', handleDocPointerDown, true);
+    };
+  }, [editingIndex, onCommit]);
+
   if (!chart || !series) return null;
   // 2026-09-01：移动端全局显隐 — 与 canvas 画线同步切换
   if (props.visible === false) return null;

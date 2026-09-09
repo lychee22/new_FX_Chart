@@ -18,7 +18,7 @@ export const TOOL = {
   TEXTBOX: 8,
   CLEAR_ONETEXT: 9,
   CLEAR_ALLTEXT: 10,
-  PARALLEL_CHANNEL: 11,  // 平行通道 (TradingView 风格三锚点)
+  PARALLEL_CHANNEL: 11,  // 平行通道 (三点: 左下角 → 左上角 → 右上角, 右下角自动推算)
 } as const;
 
 export interface ToolDef {

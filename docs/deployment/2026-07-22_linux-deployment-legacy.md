@@ -33,7 +33,7 @@ Linux 防火墙只需开放 TCP `23722`。后端 `23723` 仅供本机代理访�
 ```text
 /opt/forex-chart/
 |-- backend/
-|   `-- chart-backend-1.0.0.jar
+|   `-- forex-chart.jar
 `-- frontend/
     |-- dist/
     |-- package.json
@@ -54,7 +54,7 @@ npm run build
 
 对应上传来源：
 
-- `backend/target/chart-backend-1.0.0.jar`
+- `backend/target/forex-chart.jar`
 - `frontend/dist/` 整个目录
 - `frontend/package.json`
 - `frontend/package-lock.json`
@@ -68,7 +68,7 @@ npm run build
 
 ```bash
 cd /opt/forex-chart/backend
-nohup java -jar chart-backend-1.0.0.jar > backend.log 2>&1 &
+nohup java -jar forex-chart.jar > backend.log 2>&1 &
 ```
 
 ### 2. 安装前端预览服务依赖
@@ -142,7 +142,7 @@ sudo firewall-cmd --reload
 
 ## 2026-07-22 本机联调结果
 
-- `mvn clean package`：成功，生成 `backend/target/chart-backend-1.0.0.jar`，6 个测试全部通过。
+- `mvn clean package`：成功，生成 `backend/target/forex-chart.jar`，测试全部通过。
 - `npm run build`：成功，生成最新 `frontend/dist/`。
 - 后端实际监听：`127.0.0.1:23723`。
 - 前端实际监听：`0.0.0.0:23722`。

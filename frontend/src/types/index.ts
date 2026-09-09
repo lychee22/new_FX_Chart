@@ -90,6 +90,145 @@ export interface RealtimeIndicatorsMessage {
   lower: RealtimeIndicatorUpdate[];
 }
 
+export type Nation = 1 | 2 | 3;
+
+export interface NationPalette {
+  /** 蜡烛图 (CandlestickSeries) 6 个颜色 */
+  candle: {
+    upColor: string;
+    downColor: string;
+    borderUpColor: string;
+    borderDownColor: string;
+    wickUpColor: string;
+    wickDownColor: string;
+  };
+  /** 柱状图 (BarSeries) 涨跌色 */
+  bar: {
+    upColor: string;
+    downColor: string;
+  };
+  /** MACD 柱状 + 信息浮层文字颜色 */
+  overlay: {
+    up: string;
+    down: string;
+  };
+  /** 控制台 / 调试用 */
+  label: string;
+}
+
+// 2026-08-05：PC 配置快照 — 从 PC 切到移动端时暂存, 切回 PC 时恢复
+// (PC 用户的图表配置不因临时切换移动端而丢失)
+export interface PcSnapshot {
+  chartType: number;
+  upper: number;
+  upperParams: number[];
+  lower: number[];
+  lowerParams: number[];
+  tool: number;
+}
+
+export interface ChartPanelProps {
+  code: string;
+  interval: number;
+  chartType: number;
+  upper: number;
+  /** 2026-08-04：叠加指标参数 (移动端设置面板接入, 真实传给后端) */
+  upperParams?: number[];
+  lower: number[];          // 多选副图指标 (支持多个叠加)
+  /** 2026-08-04：副图指标参数 (移动端设置面板接入, 真实传给后端) */
+  lowerParams?: number[];
+  tool: number;
+  decimals: number;
+  /** 区域配色 (按后端 nation 字段切换, 见 src/constants/nation.ts) */
+  palette: NationPalette;
+  /** 2026-07-29：副图上下移动 (dir = -1 上移 / +1 下移)，仅重排不重建 series */
+  onReorderLower: (tech: number, dir: -1 | 1) => void;
+  /** 2026-07-29：删除指定副图 */
+  onRemoveLower: (tech: number) => void;
+  registerExport: (fn: () => void) => void;
+  /** 2026-08-05：注册"手动刷新/断线重连重拉"入口 — 工具栏刷新按钮与 WS 重连回调共用 */
+  registerRefresh?: (fn: () => void) => void;
+  /** 2026-07-31：文字框创建后/右键退出时重置绘图工具 */
+  onToolChange: (tool: number) => void;
+  // 2026-09-07：每类工具对象数量变化时上报 (key=TOOL.*, value=count),
+  // 移动端工具按钮需要据此判断点击时是否已达上限。
+  registerDrawingCounts?: (counts: Record<number, number>) => void;
+  // 2026-09-09：以下 prop 已迁移走 window.CustomEvent / 命令总线 / window.__chartZoom，ChartPanel 不再需要：
+  //   onZoomOut / onZoomIn / onShiftLeft / onShiftRight — 由 App 通过 (window as any).__chartZoom 触发
+  //   onUndo / canUndo / registerCanUndo — 由 useChartCommandBus 监听 'chart:undo' CustomEvent
+  //   onClearAll / registerCanClear — 由 useChartCommandBus 监听 'chart:clear-all' CustomEvent
+  // 见 hooks/useChartCommandBus.ts。
+  /** 2026-08-03：移动端横屏全屏状态 — 全屏时即使宽度>768px 也按手机布局处理 (主图 2x 拉伸 + 触摸平移门控) */
+  fullscreen?: boolean;
+  /** 2026-08-04：设备类型 — 触摸屏设备(pointer: coarse)为 true, 按手机布局处理 (pane 拉伸/手势门控/轴密度) */
+  mobile?: boolean;
+  /** 2026-08-04：移动端点击副图 pane → 循环切换副图指标 (由 MobileLayout 提供实现) */
+  onCycleLower?: () => void;
+  /** 2026-08-06：刷新进行状态上报 (手动刷新/WS 重连重拉期间 true) — 驱动工具栏/顶栏刷新按钮转圈 */
+  onRefreshingChange?: (refreshing: boolean) => void;
+  /** 2026-09-01：移动端横屏画线模式 (抽屉是否打开)。true 时启用 tap 定点/选中交互 */
+  mobileDrawMode?: boolean;
+  /** 2026-09-01：已画线条全局显隐 (来自抽屉的"隐藏/显示画线"开关) */
+  drawingsVisible?: boolean;
+}
+
+export interface MobileLayoutProps {
+  /** 2026-08-04：设备类型 — 触摸屏设备(pointer: coarse)为 true, 透传给 ChartPanel */
+  mobile?: boolean;
+  instruments: Instrument[];
+  code: string;
+  interval: number;
+  chartType: number;
+  upper: number;
+  /** 2026-08-04：叠加指标参数 (设置面板接入, 真实传给后端) */
+  upperParams: number[];
+  lower: number[];
+  /** 2026-08-04：副图指标参数 (设置面板接入, 真实传给后端) */
+  lowerParams: number[];
+  tool: number;
+  decimals: number;
+  /** 区域配色 (按后端 nation 字段切换) */
+  palette: NationPalette;
+  titleText: string;
+  onCodeChange: (v: string) => void;
+  onIntervalChange: (v: number) => void;
+  onChartTypeChange: (v: number) => void;
+  onUpperChange: (v: number) => void;
+  /** 2026-08-04：叠加指标参数变化 (设置面板套用) */
+  onUpperParamsChange: (p: number[]) => void;
+  onLowerChange: (v: number) => void;
+  /** 2026-08-04：副图指标参数变化 (设置面板套用) */
+  onLowerParamsChange: (p: number[]) => void;
+  onToolChange: (v: number) => void;
+  onZoomOut: () => void;
+  onZoomIn: () => void;
+  onShiftLeft: () => void;
+  onShiftRight: () => void;
+  /** 2026-07-29：副图上下移动 (桌面端浮层用, 移动端保留接口占位) */
+  onReorderLower: (tech: number, dir: -1 | 1) => void;
+  /** 2026-07-29：删除指定副图 */
+  onRemoveLower: (tech: number) => void;
+  registerExport: (fn: () => void) => void;
+  /** 2026-08-05：手动刷新入口 (顶栏刷新按钮) */
+  onRefresh: () => void;
+  /** 2026-08-06：刷新进行中 — 顶栏刷新图标旋转转圈 (不影响界面展示) */
+  refreshing: boolean;
+  /** 2026-08-06：ChartPanel 刷新状态上报 — 转发给内部 ChartPanel, 由 App 驱动按钮转圈 */
+  onRefreshingChange?: (refreshing: boolean) => void;
+  /** 2026-08-05：注册 ChartPanel 的 refreshAllData (刷新按钮与 WS 重连重拉共用) */
+  registerRefresh: (fn: () => void) => void;
+  /** 2026-07-30：撤销最后一个绘图 */
+  onUndo: () => void;
+  /** 2026-07-30：是否有可撤销对象 — 由 App 通过 'chart:can-undo-changed' 事件驱动 */
+  canUndo: boolean;
+  /** 2026-07-31：清除所有已绘制对象 */
+  onClearAll: () => void;
+  /** 2026-07-31：是否有可清除对象 */
+  canClear: boolean;
+  // 2026-09-07：每类工具对象数量变化时由 ChartPanel 上报, 驱动工具按钮提前检查上限。
+  registerDrawingCounts?: (counts: Record<number, number>) => void;
+}
+
 // ---------------- 图表常量 (与后端 ChartConstants 对齐) ----------------
 
 export const CHART_TYPE = {

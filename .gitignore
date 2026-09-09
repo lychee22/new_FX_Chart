@@ -8,3 +8,14 @@ backend/target/
 backend/.zcode/
 backend/*.log
 .zcode
+.log
+
+# Office 锁文件（避免 Word/Excel/PowerPoint 残留的临时锁误入库）
+~$*.docx
+~$*.xlsx
+~$*.pptx
+
+# 已迁移到 docs/changelogs/ 与 docs/deployment/ 的旧根目录变更/部署备忘
+# （保留在工作区但禁止追踪；如需恢复可重新 mv）
+FXCOR-Chart-变更说明-20260904.docx
+

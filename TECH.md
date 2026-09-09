@@ -1,9 +1,9 @@
 # FOREX_CHART 技术接手手册
 
-> 最后核对：2026-07-23 14:51:41 +08:00  
+> 最后核对：2026-08-06 11:59:50 +08:00  
 > 适用范围：新项目 `backend/`、`frontend/` 及固定 Linux 部署包 `offline-packages/FOREX_CHART/`。  
 > 旧项目 `chart/` 只作为业务行为和显示效果的参考，不参与新项目启动。  
-> 当前状态：历史行情和实时逐笔均为模拟数据；尚未接入正式报价源、数据库或外部行情 WebSocket。
+> 当前状态：默认仍使用模拟行情；已实现旧 SQL Server 的 CU 历史 K 线读取，数据库模式暂不提供实时行情。
 
 ## 1. 先看结论
 
@@ -13,9 +13,10 @@
 - 后端使用 Spring Boot，负责品种配置、历史 K 线、技术指标计算、支撑阻力以及 WebSocket 实时推送。
 - 浏览器只访问前端端口 `23722`；前端服务器将 `/api` 和 `/ws` 代理到同机后端 `127.0.0.1:23723`。
 - 页面打开后会自动建立一条 WebSocket；切换品种或周期时，在同一连接中取消旧订阅并订阅新组合。
-- 1 分钟、5 分钟、10 分钟等周期都采用相同规则：周期未结束时持续更新最后一根柱，越过自然周期边界后才新增下一根柱。
+- sample 模拟实时中的 1 分钟、5 分钟、10 分钟等周期采用相同规则：周期未结束时持续更新最后一根柱，越过自然周期边界后才新增下一根柱。
 - “一目均衡图”对应旧项目 Ichimoku，已实现五条线、前移 22 根、绿色网格云层和红蓝交叉信号。
-- 当前可演示完整实时效果，但模拟器不是正式报价源。正式上线前必须完成第 10 节的数据源改造和安全加固。
+- `prosticks.price-source=database` 时，后端按 11 个周期读取旧库 CU 表，时间按 GMT 周期开始时间解释。
+- 模拟实时只允许在 `sample` 模式运行；数据库模式不会把真实历史 K 线与模拟 Tick 混在一起。
 
 常用入口：
 
@@ -36,7 +37,7 @@ D:\projects\FOREX_CHART\
 │  ├─ pom.xml
 │  ├─ src/main/java/com/prosticks/chart/
 │  ├─ src/main/resources/application.yml
-│  └─ target/chart-backend-1.0.0.jar
+│  └─ target/forex-chart.jar
 ├─ frontend/                        新前端 React/Vite 工程
 │  ├─ src/
 │  ├─ vite.config.ts
@@ -45,10 +46,11 @@ D:\projects\FOREX_CHART\
 ├─ chart/                           旧 ASP/JavaScript 图表，仅供比对
 ├─ offline-packages/FOREX_CHART/    Linux 固定目录部署包内容
 ├─ README.md                        项目概览
-├─ ICHIMOKU_ALIGNMENT_20260721.md   一目均衡图对齐记录
-├─ MOBILE_IFRAME_ADAPTATION_20260721.md
-├─ REALTIME_WEBSOCKET_20260721.md
-├─ FIXED_LINUX_DEPLOYMENT_20260722.md
+├─ docs/
+│   ├─ changelogs/                   变更日志（按日期归档）
+│   ├─ deployment/                   部署文档（Linux 部署、手机本地调试）
+│   ├─ requirements/                 需求文档
+│   └─ frontend-reading-guide.md     前端代码分阶段阅读路线
 └─ TECH.md                          本文档
 ```
 
@@ -68,20 +70,22 @@ flowchart LR
     R --> M["MarketDataService"]
     R --> I["IndicatorEngine"]
     M --> P{"PriceSource"}
-    P --> S["SamplePriceSource 当前启用"]
+    P --> S["SamplePriceSource 默认启用"]
+    P --> D["DatabasePriceSource 可选"]
     P --> H["HttpPriceSource 对接模板"]
     W --> RT["RealtimeMarketService"]
     RT --> A["RealtimeBarAggregator"]
     W --> I
     S -.->|"确定性历史模拟"| M
-    RT -.->|"100ms 模拟逐笔"| A
+    D -->|"JDBC 只读"| DB["旧 SQL Server ProchartNew"]
+    RT -.->|"sample 模式模拟逐笔"| A
 ```
 
 重要现实边界：
 
 - `PriceSource` 当前只定义“获取历史 K 线”的 `getBars(...)`，没有定义实时逐笔订阅。
-- `RealtimeMarketService` 当前直接生成模拟逐笔，没有经过 `PriceSource`。
-- 因此，把 `prosticks.price-source` 改成 `http` 只能替换历史 K 线来源，不会自动把实时数据切换成正式行情。
+- `RealtimeMarketService` 的模拟逐笔没有经过 `PriceSource`，并且现在只允许在 `sample` 模式运行。
+- `database` 和 `http` 只替换历史 K 线来源，不会自动获得正式实时行情；WebSocket 仍会保留订阅确认和心跳。
 
 ## 4. 后端技术说明
 
@@ -94,6 +98,7 @@ flowchart LR
 | 推荐运行时 | Java 21；最低 Java 17 |
 | REST | `spring-boot-starter-web` |
 | WebSocket | `spring-boot-starter-websocket` |
+| 数据库 | Spring JDBC、HikariCP、Microsoft SQL Server JDBC Driver |
 | 参数校验依赖 | `spring-boot-starter-validation`，但控制器当前未系统使用 Bean Validation |
 | API 文档 | springdoc OpenAPI 2.3.0 |
 | 测试 | JUnit 5 / Spring Boot Test |
@@ -103,7 +108,7 @@ flowchart LR
 
 - Spring Boot 自动配置；
 - `@EnableScheduling` 定时任务；
-- `PriceSourceProperties` 和 `RealtimeProperties` 配置绑定。
+- `PriceSourceProperties` 和 `RealtimeProperties` 配置绑定；database 模式额外绑定 `DatabaseSourceProperties`。
 
 ### 4.2 后端包职责
 
@@ -111,7 +116,7 @@ flowchart LR
 |---|---|---|
 | `controller` | `MetaController`、`MarketController`、`IndicatorController` | 对外 REST 接口 |
 | `service` | `InstrumentService`、`MarketDataService` | 品种校验、代码映射、历史 K 线、支撑阻力 |
-| `pricesource` | `PriceSource`、`SamplePriceSource`、`HttpPriceSource` | 历史行情来源抽象及实现 |
+| `pricesource` | `PriceSource`、`SamplePriceSource`、`DatabasePriceSource`、`HttpPriceSource` | 历史行情来源抽象及实现 |
 | `indicator` | `IndicatorEngine`、`IndicatorKeyResolver` | 24 类指标计算和前端数字 ID 映射 |
 | `realtime` | `MarketWebSocketHandler`、`RealtimeMarketService`、`RealtimeBarAggregator` | 订阅、模拟逐笔、K 线聚合、指标增量和心跳 |
 | `model` | `Bar`、`Instrument`、`IndicatorResult`、`SupportResist` | REST 和 WebSocket 的共享数据模型 |
@@ -160,7 +165,7 @@ sequenceDiagram
 | `popen/pclose` | double | Prosticks 衍生值 |
 | `impmp` | boolean | 是否为重要模态点 |
 
-正式价源如果只提供 OHLCV，`BarBuilder` 会把 `mp/mc/vap/vam/ut/lt` 置为 `0`。普通蜡烛、均线等仍可显示，但 Prosticks 形态、模态量和基于模态点的能力会退化。
+旧数据库模式会从日/周/月表读取 `mp/mc/vap/vam`，日表再读取 `ut/lt`；日内周期沿用旧 ASP 输出口径，仅提供 OHLCV。其他只提供 OHLCV 的价源由 `BarBuilder` 将模态字段置为 `0`。
 
 实时新柱当前主要依赖 `time` 和 OHLCV；它的 `dt/localtime` 尚未按真实时间完整回填。前端目前用 `time` 绘图，所以演示不受影响，但正式保存或下游消费前应补齐。
 
@@ -278,7 +283,7 @@ prosticks:
 - 前端 `IchimokuPrimitive` 在 `Senkou A/B` 之间绘制浅绿/深绿虚线网格云层，并在 Tenkan/Kijun 交叉处绘制红色向上或蓝色向下信号。
 - 实时 `INDICATORS` 消息到达后，五条线和云层会合并最新点并重新绘制。
 
-完整对齐说明见 `ICHIMOKU_ALIGNMENT_20260721.md`。
+完整对齐说明见 `docs/changelogs/2026-07-21_ichimoku-alignment.md`。
 
 ### 4.9 REST API
 
@@ -553,8 +558,8 @@ REST CORS 当前只允许任意主机的 `23722` HTTP/HTTPS Origin；WebSocket �
 |---|---:|---|
 | `server.address` | `127.0.0.1` | 后端仅允许同机访问 |
 | `server.port` | `23723` | 后端端口 |
-| `prosticks.price-source` | `sample` | `sample` 或 `http` |
-| `prosticks.realtime.enabled` | `true` | 是否运行模拟 Tick；不是总 WebSocket 开关 |
+| `prosticks.price-source` | `${PROSTICKS_PRICE_SOURCE:sample}` | `sample`、`database` 或 `http` |
+| `prosticks.realtime.enabled` | `${PROSTICKS_REALTIME_ENABLED:true}` | 是否允许模拟 Tick；只有 `sample` 模式实际启用 |
 | `prosticks.realtime.tick-interval-ms` | `100` | 模拟器尝试生成 Tick 的间隔 |
 | `prosticks.realtime.bar-push-interval-ms` | `500` | dirty Bar 的最大发送频率 |
 | `prosticks.realtime.indicator-push-interval-ms` | `1000` | 指标增量计算/发送频率 |
@@ -563,6 +568,12 @@ REST CORS 当前只允许任意主机的 `23722` HTTP/HTTPS Origin；WebSocket �
 | `prosticks.http.base-url` | 空 | HTTP 价源根地址 |
 | `prosticks.http.api-key` | 空 | 当前模板的查询参数密钥 |
 | `prosticks.http.bars-path` | `/candles/{symbol}?interval={interval}&count={count}` | 历史 K 线路径模板 |
+| `prosticks.database.jdbc-url` | `${FOREX_DB_URL:}` | SQL Server JDBC URL，database 模式必填 |
+| `prosticks.database.username` | `${FOREX_DB_USERNAME:}` | 旧库只读账号，database 模式必填 |
+| `prosticks.database.password` | `${FOREX_DB_PASSWORD:}` | 只从环境变量注入，禁止提交真实密码 |
+| `prosticks.database.maximum-pool-size` | `5` | 旧库连接池最大连接数 |
+| `prosticks.database.connection-timeout-ms` | `10000` | 取得数据库连接的最长等待时间 |
+| `prosticks.database.query-timeout-seconds` | `15` | 单次历史查询超时 |
 
 定时任务使用 `fixedDelay`。例如把 Bar 推送改为 300ms：
 
@@ -594,19 +605,32 @@ mvn spring-boot:run
 ```powershell
 Set-Location D:\projects\FOREX_CHART\backend
 mvn clean package
-java -jar .\target\chart-backend-1.0.0.jar
+java -jar .\target\forex-chart.jar
 ```
 
 如果 JAR 已经存在，可直接执行第二条命令。指定某个 Java 21：
 
 ```powershell
-& 'D:\Java\jdk21\bin\java.exe' -jar 'D:\projects\FOREX_CHART\backend\target\chart-backend-1.0.0.jar'
+& 'D:\Java\jdk21\bin\java.exe' -jar 'D:\projects\FOREX_CHART\backend\target\forex-chart.jar'
 ```
+
+使用旧数据库历史价源时，在当前 PowerShell 会话中先设置环境变量：
+
+```powershell
+$env:PROSTICKS_PRICE_SOURCE = 'database'
+$env:PROSTICKS_REALTIME_ENABLED = 'false'
+$env:FOREX_DB_URL = 'jdbc:sqlserver://数据库主机:1433;databaseName=ProchartNew;encrypt=true;trustServerCertificate=true'
+$env:FOREX_DB_USERNAME = '只读账号'
+$env:FOREX_DB_PASSWORD = '密码'
+java -jar .\target\forex-chart.jar
+```
+
+`trustServerCertificate=true` 只适用于当前内网证书尚未纳入 Java 信任库的情况；具备正式受信证书后应删除该参数或改为 `false`。真实账号密码不得写入 `application.yml`、启动脚本或本文档。
 
 临时覆盖端口：
 
 ```powershell
-java -jar .\target\chart-backend-1.0.0.jar --server.port=23723 --server.address=127.0.0.1
+java -jar .\target\forex-chart.jar --server.port=23723 --server.address=127.0.0.1
 ```
 
 ### 7.4 启动前端开发服务
@@ -709,11 +733,17 @@ sha256sum -c MANIFEST.sha256
 
 ## 9. 测试与当前验证状态
 
-2026-07-23 14:51 本文档编写前执行：
+2026-08-06 11:35 本次旧数据库历史价源开发后执行：
 
 ```text
 backend: mvn test
-结果：6 tests，0 failures，0 errors，BUILD SUCCESS
+结果：14 tests，0 failures，0 errors，BUILD SUCCESS
+
+backend: mvn clean package
+结果：BUILD SUCCESS，生成 target/forex-chart.jar
+
+backend: sample 模式随机端口启动并请求 /api/meta/instruments、/api/bars
+结果：35 个品种，3 根 JPY/5分钟 Bar，时间从旧到新，HTTP 正常
 
 frontend: npm exec tsc -- --project tsconfig.json --noEmit --pretty false
 结果：通过，无 TypeScript 错误
@@ -725,6 +755,10 @@ frontend: npm exec tsc -- --project tsconfig.json --noEmit --pretty false
 - 5 分钟同周期更新最后柱和跨周期新增柱；
 - 有 Tick 才产生 dirty Bar，消费后不重复推送；
 - 指标实时消息只保留各序列最后有效点。
+- CU 11 个周期到旧表的白名单映射和参数占位符；
+- 旧库 GMT 周期开始时间、OHLCV/模态字段到 `Bar` 的转换；
+- 查询结果从数据库“新到旧”反转为 API“旧到新”；
+- database 历史模式不会创建模拟实时柱。
 
 尚未形成自动化覆盖的重点：
 
@@ -741,11 +775,13 @@ frontend: npm exec tsc -- --project tsconfig.json --noEmit --pretty false
 
 ### 10.1 历史链路
 
-可以选择：
+当前支持：
 
-1. 完成 `HttpPriceSource`，按供应商格式实现鉴权、周期映射、分页、时区、限流和响应校验；或
-2. 新建 `DatabasePriceSource implements PriceSource`，从企业数据库读取已落地的 OHLCV/Prosticks 数据；或
-3. 新建供应商专用 `XxxPriceSource`，不要把大量供应商分支堆入通用模板。
+1. `SamplePriceSource`：默认模拟历史数据；
+2. `DatabasePriceSource`：已实现旧 SQL Server 的 CU 历史数据；
+3. `HttpPriceSource`：仍是供应商 HTTP 接口模板，尚未正式对接。
+
+未来直接接供应商时应新增供应商专用 `XxxPriceSource`，不要把大量供应商分支堆入通用模板。
 
 输出必须满足：
 
@@ -788,7 +824,7 @@ Tick
 
 ### 10.3 Prosticks 专属字段
 
-必须向旧系统负责人或数据提供方确认：
+旧数据库第一阶段的已确认结论见第 15 节。未来直接对接供应商或扩大业务范围时，仍必须向数据提供方确认：
 
 - `mp/mc/vap/vam/ut/lt` 是行情源直接提供、数据库预计算，还是后端二次计算；
 - 日/周/月和日内数据的聚合口径；
@@ -802,12 +838,12 @@ Tick
 
 | 级别 | 当前限制 | 影响/处理建议 |
 |---|---|---|
-| 高 | 历史和实时数据仍是模拟数据 | 不能用于真实交易判断；按第 10 节接正式源 |
-| 高 | 实时模拟器不经过 `PriceSource` | 切 HTTP 历史源后实时仍是模拟价格；需新增实时输入抽象 |
+| 高 | 数据库模式尚未用生产连接完成联调 | 代码、字段和 SQL 契约已测试；上线前逐周期核对生产查询结果 |
+| 高 | 数据库模式只有历史 K 线，没有实时更新 | 当前不会生成假实时柱；后续需增加旧库轮询或正式实时输入 |
 | 高 | 无鉴权，WebSocket Origin 为 `*` | 外网正式部署前接入认证、授权和可信 Origin |
 | 高 | `HttpPriceSource` 缺 10 分钟、2 小时映射 | 正式启用前按供应商文档补齐并测试 |
 | 中 | HTTP 拉取失败返回空列表 | 增加重试、熔断、明确错误响应和空数据保护 |
-| 中 | 无数据库和持久化 | 服务重启后实时状态和绘图对象消失 |
+| 中 | `database` 依赖旧库可用性且没有缓存 | 旧库不可达时历史接口失败；需要运维监控连接和查询耗时 |
 | 中 | Vite preview 不是正式生产服务器 | 效果验证可用，正式发布引入网关/Web Server |
 | 中 | 前端未绘制指标 `levels` | RSI 等参考线暂不显示，需要专门实现 |
 | 低 | 后端支持 OBV、Volume+、VAO，但工具栏未列出 | 如业务需要，在 `LOWER_OPTIONS` 增加选项 |
@@ -847,7 +883,8 @@ tail -n 100 run/backend.log
 - 浏览器开发者工具 Network 中检查 `/ws/market` 是否为 `101 Switching Protocols`。
 - 检查是否持续收到 `HEARTBEAT`、`BAR`。
 - 确认 Vite `/ws` 代理仍指向 `ws://127.0.0.1:23723`。
-- 确认 `prosticks.realtime.enabled=true`。
+- 只有 `sample` 模式提供模拟跳动；`database` 第一阶段只有历史，看到心跳但没有 `BAR` 属于预期行为。
+- sample 模式再确认 `prosticks.realtime.enabled=true`。
 - 如果已经改成真实上游，确认最后 Tick 时间，而不是只看 500ms 定时参数。
 
 ### 12.4 一目均衡图有线但没有云层
@@ -892,8 +929,8 @@ ss -lntp | grep -E ':(23722|23723)[[:space:]]'
 4. `MarketWebSocketHandler.java` 和 `MarketSocket.ts`，理解实时协议。
 5. `MarketDataService.java`、`RealtimeMarketService.java`、`RealtimeBarAggregator.java`，理解历史与实时接缝。
 6. `IndicatorEngine.java`、`ChartPanel.tsx` 和两个 primitive，理解指标与绘图。
-7. `FIXED_LINUX_DEPLOYMENT_20260722.md`，理解服务器发布流程。
-8. 准备接正式报价源时再读第 10～11 节，并向旧系统负责人补齐权威数据规则。
+7. `docs/deployment/2026-07-22_linux-deployment.md`，理解服务器发布流程。
+8. 使用旧数据库时阅读第 15 节；准备接正式报价源时再读第 10～11 节。
 
 ## 14. 文档维护规则
 
@@ -908,3 +945,99 @@ ss -lntp | grep -E ':(23722|23723)[[:space:]]'
 - 重新生成 Linux 完整部署包。
 
 本文件描述的是当前代码事实。旧项目行为、业务口径和正式数据源规则如果尚未得到负责人确认，应继续标记为待确认，不能凭推测写成生产规则。
+
+## 15. 旧数据库 CU 历史接入记录
+
+### 15.1 2026-08-06 已确认边界
+
+- 新系统只读取旧数据库，不负责 eSignal 写库。
+- 第一阶段只处理 CU 外汇和贵金属；IX 指数不在本阶段范围。
+- `tbl10MinCU` 在生产库存在，字段按其他分钟表的 `MinOpen/MinHigh/MinLow/MinClose/MinVolume` 处理。
+- CU 时间字段是 GMT，表示每根 K 线的周期开始时间。
+- 旧程序持续维护旧库数据；本阶段只读取已完成的历史 K 线，不做数据库轮询和实时推送。
+- 使用既有只读账号，不修改旧表、不增加表、不执行写操作。
+
+### 15.2 周期、表和字段映射
+
+| 新系统 interval | 周期 | 旧表 | 时间字段 | OHLCV 字段 |
+|---:|---|---|---|---|
+| 0 | 日 | `tblDayCU` | `DateTime` | `DayOpen/DayHigh/DayLow/DayClose/DayVolume` |
+| 1 | 周 | `tblWeekCU` | `Week` | `WeekOpen/WeekHigh/WeekLow/WeekClose/WeekVolume` |
+| 2 | 月 | `tblMonthCU` | `Month` | `MonthOpen/MonthHigh/MonthLow/MonthClose/MonthVolume` |
+| 3 | 1 分钟 | `tblMinCU` | `DateTime` | `MinOpen/MinHigh/MinLow/MinClose/MinVolume` |
+| 4 | 5 分钟 | `tbl5MinCU` | `DateTime` | `MinOpen/MinHigh/MinLow/MinClose/MinVolume` |
+| 5 | 10 分钟 | `tbl10MinCU` | `DateTime` | `MinOpen/MinHigh/MinLow/MinClose/MinVolume` |
+| 6 | 15 分钟 | `tbl15MinCU` | `DateTime` | `MinOpen/MinHigh/MinLow/MinClose/MinVolume` |
+| 7 | 30 分钟 | `tbl30MinCU` | `DateTime` | `MinOpen/MinHigh/MinLow/MinClose/MinVolume` |
+| 8 | 1 小时 | `tblHourCU` | `DateTime` | `HourOpen/HourHigh/HourLow/HourClose/HourVolume` |
+| 9 | 2 小时 | `tbl2HourCU` | `DateTime` | `HourOpen/HourHigh/HourLow/HourClose/HourVolume` |
+| 10 | 4 小时 | `tbl4HourCU` | `DateTime` | `Open/High/Low/Close/Volume` |
+
+模态字段口径：
+
+- 日线：`VAPlus -> vap`、`VAMinus -> vam`、`MP -> mp`、`MC -> mc`、`UpperTail -> ut`、`LowerTail -> lt`。
+- 周线：`WeekVAPlus -> vap`、`WeekVAMinus -> vam`、`WeekMP -> mp`、`WeekMC -> mc`，`ut/lt=0`。
+- 月线：`VAPlus -> vap`、`VAMinus -> vam`、`MP -> mp`、`MC -> mc`，`ut/lt=0`。
+- 日内：沿用旧 `chart/data/datajson.asp` 的输出行为，只读取 OHLCV，模态字段统一为 `0`。虽然 `tbl4HourCU` 结构中存在模态列，第一阶段也不额外启用。
+
+### 15.3 查询和输出规则
+
+1. 表名和字段名全部来自 `LegacyCuQuerySpec` 固定白名单，外部参数不能指定表名或列名。
+2. 每次使用 `Code` 和数量参数查询：SQL Server `TOP (?)`，按时间字段倒序获取最近数据。
+3. `Code` 使用 JDBC 参数绑定；默认取前端要求的 300 根，数据库价源最大限制为 1000 根。
+4. 查询结果在后端反转，REST 始终返回“最旧到最新”，符合 `PriceSource` 契约和 Lightweight Charts 要求。
+5. 旧库无时区的 `smalldatetime` 按 GMT 周期开始时间转成 Unix 秒；`dt/localtime` 保留旧格式 `YYYYMMDDHHMM`。
+6. `mclose/pclose` 由 `Bar` 统一计算；`popen` 按最旧到最新递推；日/周/月使用旧图 `mc>=8` 的均值口径标记 `impmp`。
+7. 查询失败会记录 `code/interval/table` 并让接口明确失败，不输出 JDBC URL、账号或密码。
+
+### 15.4 启动与联调
+
+Linux 可在启动前设置以下环境变量；如果通过服务管理器启动，应把变量放到受权限保护的服务环境文件中：
+
+```bash
+export PROSTICKS_PRICE_SOURCE=database
+export PROSTICKS_REALTIME_ENABLED=false
+export FOREX_DB_URL='jdbc:sqlserver://数据库主机:1433;databaseName=ProchartNew;encrypt=true;trustServerCertificate=true'
+export FOREX_DB_USERNAME='只读账号'
+export FOREX_DB_PASSWORD='密码'
+cd /chart/FOREX_CHART
+./scripts/restart-all.sh
+```
+
+实际数据库可访问后，先验证一个品种的全部 11 个周期：
+
+```powershell
+0..10 | ForEach-Object {
+  $url = "http://127.0.0.1:23723/api/bars?code=JPY&interval=$_&count=3&shift=false"
+  $bars = Invoke-RestMethod $url
+  "interval=$_ count=$($bars.Count) first=$($bars[0].dt) last=$($bars[-1].dt)"
+}
+```
+
+联调验收时必须确认：每个周期返回数据、时间严格递增、最新时间与 DBeaver 查询一致、OHLCV 一致，以及日/周/月模态字段一致。当前本地没有使用生产账号执行上述数据库联调，因此不能把单元测试通过等同于生产数据库验收。
+
+### 15.5 固定后端 JAR 名称
+
+2026-08-06 11:55:28 确认后端 Maven 构建产物固定为 `backend/target/forex-chart.jar`。Windows 启动命令、Linux 启停脚本、环境检查、离线部署包和校验清单必须统一使用该名称；`artifactId=chart-backend` 与 `spring.application.name=prosticks-chart-backend` 仍保留，因为它们分别是 Maven 坐标和应用标识，不是部署文件名。
+
+2026-08-06 11:59:50 已重新执行 `mvn clean package`，14 个测试全部通过，并用 `java -jar target/forex-chart.jar` 完成 REST 启动冒烟。`FOREX_CHART` 与历史部署包副本的 JAR、内部清单、压缩包和外层 SHA-256 均已同步；当前 Windows 没有可用的 Linux Bash 环境，因此未执行 `bash -n`，本次脚本只改动固定文件名和注释。
+
+### 15.6 2026-08-24 空表补数与生产库联调验收
+
+**盘点结论 (2026-08-24 12:15)**：生产库 11 张 CU 表中 `tblMinCU`、`tbl10MinCU`、`tbl15MinCU`、`tbl4HourCU` 全空，`tblHourCU` 仅有 2 行 2026-06-01 的测试残留 (AUD/EUR, Volume=0)；其余 6 张有真实数据，最新到 2026-07-10 20:55 (周五收盘)。全部 35 个品种代码 (yml 实际为 35 个，README 写 34 个是文档误差) 在 `tbl5MinCU` 中均有完整数据。
+
+**补数口径 (已获负责人 2026-08-24 授权，推翻 15.1 的"不写库"边界，仅限本节范围)**：
+
+1. 10 分 / 15 分 / 1 小时 / 4 小时：在服务端直接从 `tbl5MinCU` 聚合，每品种取最近 1000 根。聚合规则 (首根 Open、末根 Close、High 取 max、Low 取 min、Volume 求和、桶时间=周期开始 GMT) 已用 `tbl30MinCU` 真实数据验证：JPY 最近 300 个 30 分桶 300/300 完全一致。
+2. 1 分钟：`tbl5MinCU` 无更细粒度来源，每品种取最近 200 根 5 分钟线，在每根内部插值为 5 根 1 分钟线 (线性 walk，最高/最低点分派到首/尾)；插值结果聚合后与原 5 分钟 OHLC 严格相等 (已程序化断言验证)。1 分钟数据属于派生近似数据，不是真实成交。
+3. 旧 `tbl2HourCU` 写入器在每日最后的不完整 2 小时桶 (20:00) 上存在 Open 口径差异 (约 6% 桶)，该表有真实数据未做改动，仅在此记录现象。
+4. `tblHourCU` 的 2 行测试残留随本次补数一并移除。
+
+**写入通道**：`<DB_USER>` 账号在 `<DB_NAME>` 上为 db_datareader + db_ddladmin，对 dbo 现有表无 INSERT 权限。补数通过"自建 `seedstage` schema (归 JAVAAPP 所有) 内的同构 staging 表装载，再 `ALTER TABLE ... SWITCH TO dbo.目标表` 元数据级切换"完成；全部结束后 staging 表与 schema 已删除，库内无遗留对象。5 张表共写入 174,886 行 (35 品种 × 约 1000 根)，其中 4 张聚合表 139,886 行、1 分钟表 35,000 行。
+
+**REST 验收 (2026-08-24 12:15)**：`PROSTICKS_PRICE_SOURCE=database` 启动 `target/forex-chart.jar`，35 品种 × 11 周期 = 385 次 `/api/bars` 调用全部成功、时间严格递增、各周期最后收盘价一致 (161.68, 2026-07-10 收盘)；日线 300/300 带真实 mp/mc、重要模态点 127 个；`/api/support-resist` 与指标接口 (RSI 小时线、Ichimoku 日线) 正常。§15.4 要求的联调验收至此完成。
+
+**遗留边界**：
+- 补数表每品种约 1000 根 (前端默认 300、后端上限 1000)，全部结束于 2026-07-10，与真实表时间末端一致；旧程序停写后所有周期均停留在该时点，刷新数据属于旧库数据链路问题，不在本项目范围。
+- 实时推送在 database 模式下保持关闭 (`PROSTICKS_REALTIME_ENABLED=false`)。
+- 1 分钟表为插值派生数据；如未来接入真实 1 分钟源，可整表切换替换。

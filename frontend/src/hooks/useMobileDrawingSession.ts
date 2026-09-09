@@ -24,6 +24,13 @@ export interface MobileDrawingSessionApi {
   finishDrawing: () => void;
   /** 抽屉打开时强制设置 tool，传给 ChartPanel；NONE 时派发 cancel-drawing */
   setTool: (tool: number) => void;
+  /**
+   * 2026-09-07：仅取消当前未完成的画线（清 pending/preview/stage/parallel 中间态），
+   * 保留当前画线工具与抽屉状态 — 移动端用户在画到一半想重新落第一个点时使用。
+   * 不走 chart:cancel-drawing（旧事件在无 pending 时会兜底 setTool(NONE)，
+   * 与"保留工具"的语义不符），改为派发 chart:cancel-pending-drawing。
+   */
+  cancelPendingDrawing: () => void;
 }
 
 /**
@@ -46,6 +53,12 @@ export function useMobileDrawingSession(
     window.dispatchEvent(new CustomEvent('chart:cancel-drawing'));
   }, []);
 
+  // 2026-09-07：仅清 pending，保留 activeTool — 独立事件以避开 chart:cancel-drawing
+  // 在无 pending 时兜底退工具的副作用。
+  const cancelPendingDrawing = useCallback(() => {
+    window.dispatchEvent(new CustomEvent('chart:cancel-pending-drawing'));
+  }, []);
+
   const setTool: MobileDrawingSessionApi['setTool'] = useCallback((tool) => {
     onToolChange(tool);
     if (tool === TOOL.NONE) cancelDrawing();
@@ -60,9 +73,11 @@ export function useMobileDrawingSession(
   }, [currentTool, onToolChange, cancelDrawing]);
 
   const finishDrawing = useCallback(() => {
+    // 关闭抽屉 + 重置工具与进行中点（用户可能在中途切换了工具 / 留下半成品线）
     closeDrawer();
-    // 重置显隐为 true（下次进入全屏默认显示已画线条）
-    setDrawingsVisible(true);
+    // 注意：不清 drawingsVisible。隐藏状态由用户明确决定，"完成画线"按钮只负责
+    // 退出画线会话，不应擅自改变画线可见性 (之前 setDrawingsVisible(true) 会把
+    // 已隐藏的画线重新显示出来)。
   }, [closeDrawer]);
 
   const toggleDrawer = useCallback(() => {
@@ -102,5 +117,6 @@ export function useMobileDrawingSession(
     toggleVisible,
     finishDrawing,
     setTool,
+    cancelPendingDrawing,
   };
 }

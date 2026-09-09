@@ -430,6 +430,57 @@ body {
   font-size: 14px;
 }
 
+/* 2026-09-04：主图无数据/加载失败兜底占位 — 复用全屏覆盖层模式 */
+.chart-empty-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  background: rgba(255, 255, 255, 0.94);
+}
+.chart-empty-icon {
+  font-size: 48px;
+  opacity: 0.5;
+  line-height: 1;
+}
+.chart-empty-title {
+  color: #4a5568;
+  font-size: 16px;
+  font-weight: 500;
+}
+.chart-empty-subtitle {
+  color: #8895a6;
+  font-size: 13px;
+  margin-bottom: 8px;
+}
+
+/* 2026-09-04：Toolbar 品种加载失败徽标 — 与下拉并排显示 */
+.toolbar-instrument-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.toolbar-instrument-retry {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  font-size: 12px;
+  color: #c0392b;
+  background: rgba(192, 57, 43, 0.08);
+  border: 1px solid rgba(192, 57, 43, 0.3);
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.toolbar-instrument-retry:hover {
+  background: rgba(192, 57, 43, 0.16);
+}
+
 /* 移动端顶栏刷新图标 — antd icon 默认 inline, 需 inline-block 才能 transform 旋转 */
 .mobile-topbar-actions .anticon.spin {
   display: inline-block;
@@ -1101,15 +1152,17 @@ body {
 /* 2026-09-01：移动端横屏全屏画线 — 右侧抽屉 + 顶部持续步骤提示 + 悬浮删除按钮 */
 /* ====================================================================== */
 @media (pointer: coarse) {
-  /* 右侧抽屉：覆盖约 30% 宽图表，绝对定位不压缩图表布局；玻璃面板 */
+  /* 右侧抽屉：覆盖约 40% 宽图表，绝对定位不压缩图表布局；玻璃面板。
+     2026-09-07：宽度从 30% 扩到 40% (170-260px)，容纳 5 个工具按钮的 2 列网格，
+     单按钮宽 ~85-110px 足够显示 "Parallel Channel" / "Fibonacci" 标签。 */
   .mobile-drawing-drawer {
     position: absolute;
     top: 0;
     right: 0;
     bottom: 0;
-    width: 30%;
-    min-width: 110px;
-    max-width: 180px;
+    width: 40%;
+    min-width: 170px;
+    max-width: 260px;
     padding: 8px 6px 8px 6px;
     background: rgba(20, 20, 28, 0.55);
     backdrop-filter: blur(8px);
@@ -1123,11 +1176,20 @@ body {
     box-sizing: border-box;
     padding-top: calc(8px + env(safe-area-inset-top, 0px));
     padding-bottom: calc(8px + env(safe-area-inset-bottom, 0px));
+    overflow-y: auto;        /* 2026-09-04：抽屉高度不够时启用滚动条，避免按钮被裁切隐藏 */
+    min-height: 0;           /* 配合 overflow：允许 flex 容器参与高度约束，子项溢出时可滚动 */
+    overscroll-behavior: contain; /* 抽屉内滚动到底不触发底层图表手势 */
+    -webkit-overflow-scrolling: touch;
   }
+  /* 2026-09-07：section 内部改为 2 列网格 (row + wrap)，工具与操作按钮均参与。
+     原 column 布局在新增文字框/斐波那契投射后变为 5 行单列, 视觉密度低; 改为 2 列后
+     5 个工具按钮排成 2+2+1, 操作区 2 个按钮并排, "完成画线" 仍跨满全宽。 */
   .mobile-drawing-drawer-section {
     display: flex;
-    flex-direction: column;
-    gap: 4px;
+    flex-direction: row;
+    flex-wrap: wrap;
+    gap: 6px;
+    flex-shrink: 0;          /* 2026-09-04：禁止按钮组被 flex 压缩，保持原有按钮高度 */
   }
   .mobile-drawing-drawer-divider {
     height: 1px;
@@ -1135,7 +1197,9 @@ body {
     background: rgba(255, 255, 255, 0.12);
   }
 
-  /* 工具按钮（直线/通道线/黄金分割线） */
+  /* 工具按钮（直线/通道线/黄金分割线/斐波那契投射/文字框）与操作按钮（删除/隐藏）
+     2026-09-07：width: 100% 改为 flex 等分两列 (calc(50% - 3px) 减去 gap 一半)。
+     parent section 是 row + wrap, 单按钮宽度足够 80-110px 容纳 "Parallel Channel" 标签。 */
   .mobile-drawing-tool-btn,
   .mobile-drawing-action-btn {
     display: flex;
@@ -1143,7 +1207,8 @@ body {
     align-items: center;
     justify-content: center;
     gap: 4px;
-    width: 100%;
+    flex: 1 1 calc(50% - 3px);
+    min-width: 70px;
     padding: 8px 4px;
     border-radius: 8px;
     border: 1px solid transparent;
@@ -1185,9 +1250,10 @@ body {
     white-space: nowrap;
   }
 
-  /* 右下角"完成画线"按钮 */
+  /* 右下角"完成画线"按钮 — 2026-09-07：跨满全宽 (不参与 2 列网格) */
   .mobile-drawing-finish-btn {
     margin-top: auto;        /* 推到底部 */
+    flex-shrink: 0;          /* 防止被 flex 容器挤压 */
     width: 100%;
     padding: 10px 6px;
     border-radius: 8px;
@@ -1205,6 +1271,30 @@ body {
   }
   .mobile-drawing-finish-btn:active {
     background: #1976d2;
+  }
+
+  /* 2026-09-07：取消画线按钮（仅清 pending，保留画线工具）— 跨满全宽, 次级色
+     紧贴在 Finish 按钮上方, 让"完成"作为主操作视觉优先。红色文字 + 浅红背景以示破坏性。 */
+  .mobile-drawing-cancel-pending-btn {
+    flex-shrink: 0;
+    width: 100%;
+    padding: 9px 6px;
+    border-radius: 8px;
+    border: 1px solid rgba(244, 67, 54, 0.35);
+    background: rgba(244, 67, 54, 0.08);
+    color: #f44336;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    touch-action: manipulation;
+    /* 紧贴 Finish 按钮，不留间隙 — 通过 flex gap 在父容器中统一控制间距 */
+  }
+  .mobile-drawing-cancel-pending-btn:active {
+    background: rgba(244, 67, 54, 0.18);
   }
 
   /* 顶部持续步骤提示条 (居中 pill, 与 .mobile-rotate-hint 同 safe-area 偏移) */

@@ -10,7 +10,6 @@ import type { Instrument } from '../types';
 interface MobileTopBarProps {
   instrument?: Instrument;
   onBack?: () => void;
-  onFullscreen?: () => void;
   onSearch?: () => void;
   /** 2026-08-04：点击标题(货币名) → 打开品种切换 (需求3) */
   onTitleClick?: () => void;
@@ -21,7 +20,7 @@ interface MobileTopBarProps {
 }
 
 /** 移动端顶部导航 (44px 高, 含安全区适配) */
-export function MobileTopBar({ instrument, onBack, onFullscreen, onSearch, onTitleClick, onRefresh, refreshing }: MobileTopBarProps) {
+export function MobileTopBar({ instrument, onBack, onSearch, onTitleClick, onRefresh, refreshing }: MobileTopBarProps) {
   const { lang, setLang } = useI18n();
   const main = instrument?.name ?? '—';
   const sub = instrument ? (lang === 'en' ? instrument.code : secondaryName(instrument.code, lang)) : '';

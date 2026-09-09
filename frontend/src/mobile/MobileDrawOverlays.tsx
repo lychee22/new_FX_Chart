@@ -22,9 +22,10 @@ export function MobileDrawOverlays(props: MobileDrawOverlaysProps) {
   const { t } = useI18n();
   const { stepHint, hasSelected, onDeleteSelected } = props;
 
-  // stepHint 已包含中文化文本；'done' 是 sentinel — 翻译为"已完成"
+  // stepHint 已包含 i18n 文案 (来自 useChartDrawInteraction 的 formatStepHint)；
+  // 'done' 是 sentinel — 走 i18n key DrawStepDone
   const stepText = stepHint === null ? null :
-    stepHint === 'done' ? '已完成' : stepHint;
+    stepHint === 'done' ? t('DrawStepDone') : stepHint;
 
   return (
     <>
@@ -37,7 +38,16 @@ export function MobileDrawOverlays(props: MobileDrawOverlaysProps) {
         <button
           type="button"
           className="mobile-drawing-delete-fab"
-          onClick={onDeleteSelected}
+          // 2026-09-02：本按钮渲染在图表容器内部，指针事件会冒泡到容器的
+          // onPointerDown/onPointerUp，被 useChartDrawInteraction 当成「点击空白」
+          // 先行取消选中 → React 立即卸载本按钮 → click 永远到不了 → 删除失效
+          // (表现为「只是把点展示取消了」)。在冒泡源头阻断，保证 tap 只触发删除。
+          onPointerDown={(e) => e.stopPropagation()}
+          onPointerUp={(e) => e.stopPropagation()}
+          onClick={(e) => {
+            e.stopPropagation();
+            onDeleteSelected();
+          }}
           aria-label={t('Delete')}
         >
           <DeleteOutlined /> {t('Delete')}

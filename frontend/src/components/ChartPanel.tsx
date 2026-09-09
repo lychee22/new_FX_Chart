@@ -1,223 +1,56 @@
-import { useEffect, useRef, useState, useCallback, type CSSProperties, type PointerEvent as ReactPointerEvent } from 'react';
-import {
-  createChart,
-  CandlestickSeries,
-  BarSeries,
-  LineSeries,
-  AreaSeries,
-  HistogramSeries,
-  ColorType,
-  CrosshairMode,
-  type IChartApi,
-  type ISeriesApi,
-  type Time,
-  type MouseEventParams,
-  type Coordinate,
-} from 'lightweight-charts';
-import { Button, message, Spin } from 'antd';
-import { ShrinkOutlined, ArrowsAltOutlined, RedoOutlined, DeleteOutlined, CaretUpOutlined} from '@ant-design/icons';
-import { marketApi, indicatorApi } from '../api/client';
-import type {
-  Bar,
-  IndicatorResult,
-  RealtimeBarMessage,
-  RealtimeIndicatorsMessage,
-} from '../types';
-import { UPPER_TECH, LOWER_TECH } from '../types';
-import { formatIndicatorParams, isDefaultParams } from '../constants/indicatorParams';
-
-// 2026-07-29：副图 ID → i18n 文案 key 的映射 (用于浮层显示副图名称)
-const LOWER_NAME_KEY: Record<number, keyof typeof import('../i18n').STRINGS['en']> = {
-  [LOWER_TECH.VOLUME]: 'VOLUME',
-  [LOWER_TECH.RSI]: 'RSI',
-  [LOWER_TECH.MACD]: 'MACD',
-  [LOWER_TECH.STC]: 'STC',
-  [LOWER_TECH.MOM]: 'MOM',
-  [LOWER_TECH.PCTR]: 'PCTR',
-  [LOWER_TECH.OBV]: 'OBV',
-  [LOWER_TECH.MC]: 'MC',
-  [LOWER_TECH.ROC]: 'ROC',
-  [LOWER_TECH.ADX]: 'ADX',
-  [LOWER_TECH.MFI]: 'MFI',
-  [LOWER_TECH.VOLA]: 'VOLA',
-  [LOWER_TECH.VOLP]: 'VOLP',
-  [LOWER_TECH.VAO]: 'VAO',
-  [LOWER_TECH.CCI]: 'CCI',
-  [LOWER_TECH.ATR]: 'ATR',
-};
-
-/** 2026-07-29：把数值简写成 K / M / B 形式（如 1111800000 → 1.11B） */
-function formatIndicatorValueShort(value: number, decimals: number): string {
-  const abs = Math.abs(value);
-  if (abs >= 1e9) return `${(value / 1e9).toFixed(2)}B`;
-  if (abs >= 1e6) return `${(value / 1e6).toFixed(2)}M`;
-  if (abs >= 1e3) return `${(value / 1e3).toFixed(2)}K`;
-  return value.toFixed(decimals);
-}
-
-/** 2026-07-29：从 IndicatorResult 取最后一个非 null 值并格式化。MACD 取主线 (series[0]) */
-function formatLastValue(result: IndicatorResult, decimals: number): string {
-  // MACD 优先显示 series[0]（DIF），其他取 series[0]
-  for (const series of result.series) {
-    const pts = series.data;
-    for (let j = pts.length - 1; j >= 0; j--) {
-      const v = pts[j].value;
-      if (v !== null && Number.isFinite(v)) return formatIndicatorValueShort(v as number, decimals);
-    }
-  }
-  return '—';
-}
-
-/** 2026-08-04：移动端副图描述条数值 (需求2) — 成交量类指标(VOLUME/VOLP)显示整数千分位 + "手"
- *  (仿股票"成交量 XXX手"), 其余指标沿用 K/M/B 缩写。 */
-function formatLowerValueForMobile(tech: number, result: IndicatorResult | undefined, decimals: number): string {
-  if (!result) return '—';
-  for (const series of result.series) {
-    const pts = series.data;
-    for (let j = pts.length - 1; j >= 0; j--) {
-      const v = pts[j].value;
-      if (v === null || !Number.isFinite(v)) continue;
-      const num = v as number;
-      if (tech === LOWER_TECH.VOLUME || tech === LOWER_TECH.VOLP) {
-        return `${Math.round(num).toLocaleString()}手`;
-      }
-      return formatIndicatorValueShort(num, decimals);
-    }
-  }
-  return '—';
-}
-
-/** 2026-07-30：指标数据兜底清洗 — 把脏数据(NaN/undefined/重复 time)处理成 Lightweight Charts 能吃的形态。
- *  - value 为 null/undefined/NaN/Infinity → 丢弃（不传 null 给 setData，否则后续 update 会再次报错）
- *  - time 必须为有限数字；非数字或缺时间字段 → 丢弃
- *  - 同 time 多点 → 仅保留最后一个
- *  - 必须严格升序排列
- *  返回 { points, allEmpty }：allEmpty=true 表示该 series 没有任何可用数据点（用于显示"数据异常"提示）
- */
-function sanitizePoints(
-  data: Array<{ time: number; value: number | null }>,
-): { points: Array<{ time: number; value: number }>; allEmpty: boolean } {
-  const filtered: Array<{ time: number; value: number }> = [];
-  for (const d of data) {
-    if (typeof d.time !== 'number' || !Number.isFinite(d.time)) continue;
-    if (d.value === null || d.value === undefined) continue;
-    if (!Number.isFinite(d.value as number)) continue;
-    filtered.push({ time: d.time, value: d.value as number });
-  }
-  // 按 time 升序排序，同 time 仅保留最后一个（防御后端偶尔乱序/重复）
-  filtered.sort((a, b) => a.time - b.time);
-  const dedup: Array<{ time: number; value: number }> = [];
-  for (let i = 0; i < filtered.length; i++) {
-    if (i > 0 && filtered[i].time === filtered[i - 1].time) {
-      dedup[dedup.length - 1] = filtered[i];
-    } else {
-      dedup.push(filtered[i]);
-    }
-  }
-  return { points: dedup, allEmpty: filtered.length === 0 };
-}
-import type { NationPalette } from '../constants/nation';
-import { MarketSocket } from '../realtime/MarketSocket';
+import { useEffect, useRef, useState, useCallback, useMemo, type CSSProperties, type PointerEvent as ReactPointerEvent } from 'react';
+import { type IChartApi, type ISeriesApi, type Time, type MouseEventParams, type Coordinate } from 'lightweight-charts';
+import { message } from 'antd';
+import { marketApi } from '../api/client';
+import type { Bar, ChartPanelProps, IndicatorResult } from '../types';
+import { INITIAL_LOADING_MIN_MS } from '../constants/chart';
+import { LONG_PRESS_MS, LOWER_TAP_THRESHOLD } from '../constants/chart';
 import { ProsticksPrimitive } from '../primitives/ProsticksPrimitive';
 import { IchimokuPrimitive } from '../primitives/IchimokuPrimitive';
 import { DrawingManager } from '../drawing/DrawingManager';
-import { TOOL } from '../drawing/tools';
+import { TOOL, LIMITED_TOOLS, MAX_PER_TYPE } from '../drawing/tools';
 import { useI18n } from '../i18n';
 import TextBoxLayer, { type TextBoxEntry } from './TextBoxLayer';
-import { useChartDrawInteraction } from '../mobile/useChartDrawInteraction';
+import { useChartDrawInteraction } from '../hooks/useChartDrawInteraction';
 import { MobileDrawOverlays } from '../mobile/MobileDrawOverlays';
+import { InfoOverlay } from './overlays/InfoOverlay';
+import { ToolsHintOverlay } from './overlays/ToolsHintOverlay';
+import { LoadingOverlay } from './overlays/LoadingOverlay';
+import { EmptyOverlay } from './overlays/EmptyOverlay';
+import { PaneTitleOverlay } from './overlays/PaneTitleOverlay';
+import { PaneSkeletonOverlay } from './overlays/PaneSkeletonOverlay';
+// Phase 2 hooks (2026-09-08)
+import { useChartInit } from '../hooks/useChartInit';
+import { useRealtimeData } from '../hooks/useRealtimeData';
+import { useOverlayIndicator } from '../hooks/useOverlayIndicator';
+import { useLowerPanes } from '../hooks/useLowerPanes';
+// PR3: 命令总线 hook (2026-09-08)
+import { useChartCommandBus } from '../hooks/useChartCommandBus';
 
-interface ChartPanelProps {
-  code: string;
-  interval: number;
-  chartType: number;
-  upper: number;
-  /** 2026-08-04：叠加指标参数 (移动端设置面板接入, 真实传给后端) */
-  upperParams?: number[];
-  lower: number[];          // 多选副图指标 (支持多个叠加)
-  /** 2026-08-04：副图指标参数 (移动端设置面板接入, 真实传给后端) */
-  lowerParams?: number[];
-  tool: number;
-  decimals: number;
-  /** 区域配色 (按后端 nation 字段切换, 见 src/constants/nation.ts) */
-  palette: NationPalette;
-  onZoomOut: () => void;
-  onZoomIn: () => void;
-  onShiftLeft: () => void;
-  onShiftRight: () => void;
-  /** 2026-07-29：副图上下移动 (dir = -1 上移 / +1 下移)，仅重排不重建 series */
-  onReorderLower: (tech: number, dir: -1 | 1) => void;
-  /** 2026-07-29：删除指定副图 */
-  onRemoveLower: (tech: number) => void;
-  registerExport: (fn: () => void) => void;
-  /** 2026-08-05：注册"手动刷新/断线重连重拉"入口 — 工具栏刷新按钮与 WS 重连回调共用 */
-  registerRefresh?: (fn: () => void) => void;
-  /** 2026-07-30：撤销最后一个绘图对象 */
-  onUndo: () => void;
-  /** 2026-07-30：当前是否存在可撤销对象 (用于按钮 disabled) */
-  canUndo: boolean;
-  /** 2026-07-30：通知父组件刷新 canUndo (在 DrawingManager.objects 变化时调用) */
-  registerCanUndo: (can: boolean) => void;
-  /** 2026-07-31：文字框创建后/右键退出时重置绘图工具 */
-  onToolChange: (tool: number) => void;
-  /** 2026-07-31：清除所有已绘制对象 (由工具栏"清除所有"按钮触发) */
-  onClearAll: () => void;
-  /** 2026-07-31：通知父组件刷新"清除所有"按钮的 disabled 状态 */
-  registerCanClear: (can: boolean) => void;
-  /** 2026-08-03：移动端横屏全屏状态 — 全屏时即使宽度>768px 也按手机布局处理 (主图 2x 拉伸 + 触摸平移门控) */
-  fullscreen?: boolean;
-  /** 2026-08-04：设备类型 — 触摸屏设备(pointer: coarse)为 true, 按手机布局处理 (pane 拉伸/手势门控/轴密度) */
-  mobile?: boolean;
-  /** 2026-08-04：移动端点击副图 pane → 循环切换副图指标 (由 MobileLayout 提供实现) */
-  onCycleLower?: () => void;
-  /** 2026-08-06：刷新进行状态上报 (手动刷新/WS 重连重拉期间 true) — 驱动工具栏/顶栏刷新按钮转圈 */
-  onRefreshingChange?: (refreshing: boolean) => void;
-  /** 2026-09-01：移动端横屏画线模式 (抽屉是否打开)。true 时启用 tap 定点/选中交互 */
-  mobileDrawMode?: boolean;
-  /** 2026-09-01：已画线条全局显隐 (来自抽屉的"隐藏/显示画线"开关) */
-  drawingsVisible?: boolean;
-}
-
-// 2026-08-06：首屏 loading 最小时长 — 原为 3s 演示用, 效果确认后归零 (仅首次加载, 切换品种不显示)。
-// 需要重新演示时可改大; 保留该结构以便将来统一调整。
-const INITIAL_LOADING_MIN_MS = 0;
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
-// 图表类型常量 (与 types/index.ts 的 CHART_TYPE 对齐)
-// 2026-07-31：新增 MAIN_VOLUME = 8，主图叠加成交量直方图 (Candle + Volume)
-const TYPE = { PROSTICKS: 0, BAR: 2, BAR_MODAL: 3, CANDLE: 4, MODAL_LINE: 5, LINE: 6, AREA: 7, MAIN_VOLUME: 8 };
-
-// 2026-07-21 18:28:13：集中维护手机与桌面的 pane 比例，避免 iframe 改变宽度后布局残留。
-// 2026-08-04：判断标准由宽度改为设备类型 (mobile prop)。
-// 2026-08-05：主图权重统一为 2 (PC/移动端一致) — 单副图时 2:1 (主图占 2/3), 多副图等分余下空间。
-function applyPaneLayout(chart: IChartApi): void {
-  const panes = chart.panes();
-  if (panes.length === 0) return;
-  panes[0].setStretchFactor(panes.length > 1 ? 2 : 1);
-  for (let i = 1; i < panes.length; i++) panes[i].setStretchFactor(1);
-}
-
 export default function ChartPanel(props: ChartPanelProps) {
+  // ===== refs =====
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const mainSeriesRef = useRef<ISeriesApi<any> | null>(null);
   // 2026-08-04：切换 chartType 时待移除的旧主图 series。
-  // 先创建新 series 再 removeSeries 旧 series —— v5 在 pane 变空时自动移除该 pane，
-  // 若先移除主图 series，副图 pane（原 index 1）会被重编号为 0，新主图与副图 series 挤进同一 pane。
   const oldMainSeriesRef = useRef<ISeriesApi<any> | null>(null);
   // 2026-07-31：主图叠加成交量直方图 series (仅 MAIN_VOLUME 类型使用，与 mainSeriesRef 同生命周期)
   const volumeSeriesRef = useRef<ISeriesApi<any> | null>(null);
   const prosticksPrimRef = useRef<ProsticksPrimitive | null>(null);
   const ichimokuPrimRef = useRef<IchimokuPrimitive | null>(null);
   const drawingMgrRef = useRef<DrawingManager | null>(null);
-  // 2026-08-03：镜像 props.fullscreen (横屏全屏), 供初始 effect 内的 resize() 闭包读取最新值
+  // 2026-09-09：保留三个独立 ref（hook 类型契约要求 MutableRefObject<boolean>），
+  // 但用 useLayoutMode() 集中函数 + 单一赋值点同步它们，避免各处重复写 3 行赋值代码。
+  // 见 hooks/utils/refs.ts 中的 useLayoutMode 工具（如未来要内化到 hooks 内部可扩展）。
   const fullscreenRef = useRef(props.fullscreen === true);
-  fullscreenRef.current = props.fullscreen === true;
-  // 2026-08-05：全屏 hide 是否已执行过 — restore 据此跳过首次挂载 (初始加载由全量路径负责)
-  const panesHiddenForFullscreenRef = useRef(false);
-  // 2026-08-04：镜像 props.mobile (设备类型), 供 resize() 等闭包读取最新值
   const mobileRef = useRef(props.mobile === true);
+  const mobileDrawModeRef = useRef(props.mobileDrawMode === true);
+  // 集中同步点 — render 阶段写一次，确保 hook 在 effect 中读到最新值。
+  fullscreenRef.current = props.fullscreen === true;
   mobileRef.current = props.mobile === true;
+  mobileDrawModeRef.current = props.mobileDrawMode === true;
   // 2026-08-04：任一指标参数非默认时置 true — WS 的 INDICATORS 增量按默认参数推送,
   // 与自定义参数结果不一致, 必须忽略 (主图 BAR 实时不受影响)。
   const wsIndicatorsDisabledRef = useRef(false);
@@ -226,37 +59,31 @@ export default function ChartPanel(props: ChartPanelProps) {
   // 抑制下一次 upper 增量(一次性); 设置面板入口不抑制, 保持原行为。
   const suppressUpperRef = useRef(false);
   const overlaySeriesRef = useRef<ISeriesApi<any>[]>([]);   // 叠加指标序列
-  const overlayRequestRef = useRef(0);
   // 副图指标序列: paneIndex → series[] (每个副图占一个独立 pane, 支持多个叠加)
-  const paneSeriesMapRef = useRef<Map<number, ISeriesApi<any>[]>>();
+  const paneSeriesMapRef = useRef<Map<number, ISeriesApi<any>[]>>(new Map());
   const barsRef = useRef<Bar[]>([]);
-  const socketRef = useRef<MarketSocket | null>(null);
-  const liveSelectionRef = useRef({
-    code: props.code, interval: props.interval, upper: props.upper, lower: props.lower,
-    chartType: props.chartType,
-  });
-  liveSelectionRef.current = {
-    code: props.code, interval: props.interval, upper: props.upper, lower: props.lower,
-    chartType: props.chartType,
-  };
-  // 2026-08-05：镜像最新 updateInfoOverlay / handleChartClick — 挂载 effect 只执行一次,
-  // 直接引用会捕获首帧渲染的旧闭包 (props.decimals / t 随品种、语言变化后不更新)。
-  // 订阅回调改走 ref.current, 与 fullscreenRef/mobileRef 同一模式。
-  const updateInfoOverlayRef = useRef<((param: MouseEventParams<Time>) => void) | null>(null);
-  const handleChartClickRef = useRef<((param: MouseEventParams<Time>) => void) | null>(null);
   // 2026-08-05：刷新入口镜像 — 挂载期订阅的 WS 重连回调与工具栏刷新按钮经由 ref 调用,
   // 确保每次都执行最新闭包 (props.code/interval/params 随渲染更新)。
   const refreshAllRef = useRef<(() => void) | null>(null);
   // 2026-08-06：首次加载是否已完成 — 仅首次显示全屏 loading, 切换品种时不再遮挡旧图
   const initialLoadedRef = useRef(false);
-  const [initialLoading, setInitialLoading] = useState(true);
-  const [info, setInfo] = useState<string>('');
-  // 2026-08-05：3 秒自动隐藏定时器 — 触屏松开/离开后自动调 clearCrosshairPosition 隐藏库光标
+  // 副图 result 缓存
+  const lowerResultsRef = useRef<Map<number, IndicatorResult>>(new Map());
+  // 2026-08-05：全屏 hide 是否已执行过 — restore 据此跳过首次挂载 (初始加载由全量路径负责)
+  const panesHiddenForFullscreenRef = useRef(false);
+  const updateInfoOverlayRef = useRef<((param: MouseEventParams<Time>) => void) | null>(null);
+  const handleChartClickRef = useRef<((param: MouseEventParams<Time>) => void) | null>(null);
   const hideTimerRef = useRef<number | null>(null);
-  // 2026-08-06：触屏十字线 rAF 帧节流 — 长按激活后按帧合并移动更新,
-  // 避免每帧多次 pointermove 同步转坐标 + setCrosshairPosition 造成位移卡顿
   const crosshairRafRef = useRef<number | null>(null);
   const lastTouchPointRef = useRef<{ clientX: number; clientY: number } | null>(null);
+
+  // ===== React state =====
+  const [initialLoading, setInitialLoading] = useState(true);
+  // 2026-09-04：主图数据状态机 — 'loading' 期间与 initialLoading 共用 Spin 覆盖层,
+  // 'empty' (成功但 bars 为空) / 'error' (请求失败) 时显示全屏占位 + 刷新按钮,
+  // 'idle' 表示数据已就绪不显示任何覆盖层
+  const [mainDataState, setMainDataState] = useState<'loading' | 'empty' | 'error' | 'idle'>('loading');
+  const [info, setInfo] = useState<string>('');
   const [toolHint, setToolHint] = useState<string>('');
   // 2026-07-27：文字框 React state — 与 DrawingManager 双向同步，由订阅回调驱动
   // 2026-08-05：改存 {box, index}（index 为 DrawingManager.objects 下标），
@@ -264,383 +91,234 @@ export default function ChartPanel(props: ChartPanelProps) {
   const [textBoxes, setTextBoxes] = useState<TextBoxEntry[]>([]);
   const [selectedTextBox, setSelectedTextBox] = useState<number | null>(null);
   const [editingTextBox, setEditingTextBox] = useState<number | null>(null);
-  // 2026-07-29：副图标题浮层 — 每个 pane 相对容器顶部的像素偏移（用于浮层定位）
-  const [paneTops, setPaneTops] = useState<number[]>([]);
-  // 2026-08-04：pane 的 top+height（点击副图循环切换指标用, 由 updatePaneTops 同步维护）
-  const [paneRects, setPaneRects] = useState<Array<{ top: number; height: number }>>([]);
-  // 2026-07-29：副图实时 result (paneIndex → IndicatorResult)，浮层用其计算"当前值"
-  const lowerResultsRef = useRef<Map<number, IndicatorResult>>(new Map());
-  const [lowerValues, setLowerValues] = useState<Map<number, string>>(new Map());
-  // 2026-07-31：副图加载/卸载骨架浮层 — 记录需要渲染骨架浮层的 paneIndex
-  const [lowerLoadingStates, setLowerLoadingStates] = useState<Set<number>>(new Set());
-  // 2026-07-31：副图淡出中（用户点击删除后 ~280ms 内显示淡出骨架）
-  const [pendingFadingOut, setPendingFadingOut] = useState<Set<number>>(new Set());
-  // 2026-07-30：副图数据异常 — sanitizePoints 后所有 series 都为空时标记，在浮层提示 message
-  const [lowerErrorStates, setLowerErrorStates] = useState<Set<number>>(new Set());
-  // 2026-07-30：本轮全量重建中加载失败的 tech 集合，对账时排除，避免重复请求失败项
-  const failedLowerRef = useRef<Set<number>>(new Set());
-  // 2026-08-04：跟踪当前已加载到 chart 的副图指标数组（精细增/删路径用）
-  const lastLowerRef = useRef<number[]>([]);
-  // 2026-08-04：首次 loadLowerIndicators 完成前，[lower] effect 必须跳过精细增/删，
-  // 避免与全量路径并发重复创建 pane / 报 priceScale index 错误。
-  const lowerInitializedRef = useRef(false);
-  // 2026-07-30：删除按钮防连点时间锁（双击会误删前移上来的下一个 pane）
-  const lastRemoveAtRef = useRef(0);
-  // 2026-07-30：添加串行链版本锁 —— 每次 [lower] effect 递增，过期链放弃，
-  // 保证任意时刻只有一条添加链在跑，杜绝并发链 paneIndex 撞车
-  const lowerApplyVersionRef = useRef(0);
+  // 2026-09-07：每类工具对象数量 — key 为 TOOL.* 数值, value 为当前数量。
+  const [drawingCounts, setDrawingCounts] = useState<Record<number, number>>({});
+  // 2026-09-09：合并 paneTops + paneRects — 原本两次遍历 panes.getBoundingClientRect() 浪费一次 layout，
+  // 现在仅维护一份 Array<{top, height}>，top 通过 layout.top 直接读取。
+  // 用途: 浮层定位 + 点击副图循环切换指标 + 触屏坐标→主图坐标系归一化。
+  const [paneLayouts, setPaneLayouts] = useState<Array<{ top: number; height: number }>>([]);
+
   const { t } = useI18n();
 
-  // 2026-09-01：移动端画线交互 hook — tap 定点 / 选中已画对象 / 步骤提示 / 完成提示。
-  // hook 内部依赖 refs (drawingMgrRef/chartRef/mainSeriesRef/containerRef) + paneRects + props。
-  // 返回 selected/stepHint/deleteSelected 直接驱动 MobileDrawOverlays 浮层。
-  // 移动端 tap 闭环接入见 onChartPointerUp 内的 hook 调用。
-  const drawInteraction = useChartDrawInteraction({
-    drawingMgrRef, chartRef, containerRef, mainSeriesRef, paneRects,
-    mobileDrawMode: props.mobileDrawMode === true,
-    tool: props.tool,
+  // ===== Hook #1: 图表初始化 + 主图渲染 + 时间轴 =====
+  const { renderMainSeries, fitTimeScaleDefault, syncPaneLayout } = useChartInit({
+    containerRef, chartRef, mainSeriesRef, oldMainSeriesRef, volumeSeriesRef,
+    prosticksPrimRef, drawingMgrRef, paneSeriesMapRef, barsRef,
+    fullscreenRef, mobileRef, mobileDrawModeRef,
+    updateInfoOverlayRef, handleChartClickRef,
+    mobile: props.mobile === true,
+    palette: props.palette,
+    setTextBoxes, setSelectedTextBox, setEditingTextBox,
+    setDrawingCounts,
+    registerDrawingCounts: props.registerDrawingCounts,
     onToolChange: props.onToolChange,
-    onLimitReached: () => { message.warning(t('LimitReached')); },
-    onDrawDone: () => { /* 'done' 提示由 hook 内置 2s 自动消失, 无需外层 message */ },
   });
 
-  // ---- 初始化图表 ----
-  useEffect(() => {
-    if (!containerRef.current) return;
-    const wheelContainer = containerRef.current;
-    // 2026-08-04：移动端轴坐标间距更小 (需求4) — 更小字号让价格轴刻度更密 (间距小, 便于读数),
-    // barSpacing 5 (PC 7) 让蜡烛更紧凑, minBarSpacing 4 防止过度缩放导致蜡烛过小/过大。
-    // 设备切换时 ChartPanel 整体重建, 无需运行时切换。
-    const isMobileLayout = props.mobile === true;
-    const chart = createChart(containerRef.current, {
-      layout: {
-        // 2026-07-22 12:51:45：iframe 图表不显示左下角 TradingView Logo 和跳转链接。
-        attributionLogo: false,
-        background: { type: ColorType.Solid, color: '#ffffff' },
-        textColor: '#202020',
-        fontSize: isMobileLayout ? 10 : 11,
-        // 2026-07-29：每个 pane 上下边界的水平分隔线（颜色与右侧价格轴、底部时间轴一致）
-        panes: {
-          enableResize: true,
-          separatorColor: '#c0c0c0',
-          separatorHoverColor: 'rgba(74, 144, 217, 0.2)',
-        },
-      },
-      grid: {
-        vertLines: { color: '#f0f0f0' },
-        horzLines: { color: '#f0f0f0' },
-      },
-      crosshair: {
-        mode: CrosshairMode.Normal,
-        vertLine: { color: '#888', labelBackgroundColor: '#003366' },
-        horzLine: { color: '#888', labelBackgroundColor: '#003366' },
-      },
-      rightPriceScale: { borderColor: '#c0c0c0' },
-      timeScale: {
-        borderColor: '#c0c0c0',
-        timeVisible: true,
-        secondsVisible: false,
-        barSpacing: isMobileLayout ? 5 : 7,
-        minBarSpacing: isMobileLayout ? 4 : undefined,
-      },
-    });
-    chartRef.current = chart;
-    const mgr = new DrawingManager(chart, null as any);
-    drawingMgrRef.current = mgr;
-    paneSeriesMapRef.current = new Map();
+  // ===== Hook #4: 叠加指标 =====
+  const { loadOverlayIndicator } = useOverlayIndicator({
+    chartRef, mainSeriesRef, ichimokuPrimRef, overlaySeriesRef,
+    barsRef, fullscreenRef,
+    palette: props.palette,
+    upper: props.upper,
+    code: props.code,
+    interval: props.interval,
+    upperParams: props.upperParams,
+    fitTimeScaleDefault,
+  });
 
-    // 2026-07-27：把文字框变更同步到 React state
-    // 2026-08-05：删除对象后 objects 下标前移 — 失效保护: 选中/编辑下标不再指向
-    // 任何现存文字框时置空 (函数式更新, 避免挂载 effect 闭包读到旧 state),
-    // 防止 Delete 键按旧下标误删前移后的其他对象。
-    const refreshTextBoxes = () => {
-      const data = mgr.getTextBoxes();
-      setTextBoxes(data);
-      setSelectedTextBox((prev) => (prev === null || data.some((d) => d.index === prev) ? prev : null));
-      setEditingTextBox((prev) => (prev === null || data.some((d) => d.index === prev) ? prev : null));
-    };
-    refreshTextBoxes();
-    const unsubscribeTextBoxes = mgr.subscribeTextBoxesChanged(refreshTextBoxes);
+  // ===== Hook #3: 副图指标 =====
+  const lowerPaneApi = useLowerPanes({
+    chartRef, paneSeriesMapRef, barsRef, lowerResultsRef, fullscreenRef,
+    fitTimeScaleDefault, syncPaneLayout,
+    wsIndicatorsDisabledRef, suppressUpperRef,
+    // 直接传 hook 已 useCallback 稳定的 loadOverlayIndicator；不再包箭头函数避免每次 render 创建新引用
+    loadOverlayIndicator,
+    palette: props.palette,
+    lower: props.lower,
+    code: props.code,
+    interval: props.interval,
+    lowerParams: props.lowerParams,
+    upperParams: props.upperParams,
+    upper: props.upper,
+    decimals: props.decimals,
+    refreshAllRef,
+    onRemoveLower: props.onRemoveLower,
+    panesHiddenForFullscreenRef,
+  });
 
-    // 十字光标移动 → 更新 OHLC 读数
-    chart.subscribeCrosshairMove((param: MouseEventParams<Time>) => {
-      updateInfoOverlayRef.current?.(param);
-    });
+  const {
+    lowerLoadingStates, lowerErrorStates, lowerValues, pendingFadingOut,
+    refreshLowerValues, updatePaneTops: updatePaneTopsFromHook,
+    removeLowerPaneImmediate, resetLowerPaneImmediate, moveLower: moveLowerFromHook,
+    hideLowerPanesForFullscreen, restoreLowerPanesFromCache,
+    loadLowerIndicatorsFull,
+  } = lowerPaneApi;
 
-    // 点击 → 绘图工具交互
-    chart.subscribeClick((param: MouseEventParams<Time>) => {
-      handleChartClickRef.current?.(param);
-    });
-
-    // 2026-07-30：右键 → 取消当前正在进行的画线 (清空点击阶段/预览, 工具保持选中)
-    // 2026-07-31：文字框工具下右键 → 退出文字框工具，回到 NONE
-    const onContextMenu = (e: MouseEvent) => {
-      e.preventDefault();
-      const mgr = drawingMgrRef.current;
-      if (!mgr) return;
-      if (mgr.getActiveTool() === TOOL.TEXTBOX) {
-        mgr.setTool(TOOL.NONE);
-        props.onToolChange(TOOL.NONE);
-      } else {
-        mgr.cancelDrawing();
-      }
-    };
-    containerRef.current.addEventListener('contextmenu', onContextMenu);
-
-    const resize = () => {
-      if (!containerRef.current) return;
-      // 2026-08-04：设备类型(pointer: coarse)判断手机布局, 与 iframe 宽度无关;
-      // 横屏全屏时也按手机布局处理 (主图 2x 拉伸 + 触摸手势门控)。
-      const isPhoneLayout = mobileRef.current || fullscreenRef.current;
-      const toolActive = drawingMgrRef.current?.getActiveTool() !== TOOL.NONE;
-      // 2026-07-21 18:28:13：手机 iframe 中纵向手势交给页面滚动，图表继续处理横向拖动。
-      // 2026-08-03：工具激活时禁用触摸平移 (horzTouchDrag=false), 否则手指拖动会平移图表而非绘图。
-      chart.applyOptions({
-        width: containerRef.current.clientWidth,
-        height: containerRef.current.clientHeight,
-        handleScroll: {
-          mouseWheel: !isPhoneLayout,
-          pressedMouseMove: true,
-          horzTouchDrag: isPhoneLayout ? !toolActive : true,
-          vertTouchDrag: !isPhoneLayout,
-        },
-      });
-      // 2026-08-04：全屏时容器尺寸变化会触发本 resize, 若此处直接 applyPaneLayout
-      // 会把副图 stretchFactor 重新设回 1, 覆盖全屏隐藏 — 统一走 syncPaneLayout。
-      syncPaneLayout();
-    };
-    const resizeObserver = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(resize);
-    resizeObserver?.observe(containerRef.current);
-    window.addEventListener('resize', resize);
-    resize();
-
-    return () => {
-      // 2026-07-31：HMR 修复 — 先显式 detach 所有 primitive
-      // 防止 HMR 重挂载后 mainSeriesRef 仍指向旧 chart 已销毁的 series,
-      // 导致 renderMainSeries 调 chart.removeSeries(悬挂指针) 抛错、主图空白。
-      if (mainSeriesRef.current) {
-        if (prosticksPrimRef.current) mainSeriesRef.current.detachPrimitive(prosticksPrimRef.current);
-        if (ichimokuPrimRef.current) mainSeriesRef.current.detachPrimitive(ichimokuPrimRef.current);
-        if (drawingMgrRef.current) mainSeriesRef.current.detachPrimitive(drawingMgrRef.current);
-      }
-      resizeObserver?.disconnect();
-      window.removeEventListener('resize', resize);
-      unsubscribeTextBoxes();
-      containerRef.current?.removeEventListener('contextmenu', onContextMenu);
-      chart.remove();
-      // 完整重置所有 ref — 避免悬挂指针泄漏到下次 mount
-      chartRef.current = null;
-      mainSeriesRef.current = null;
-      oldMainSeriesRef.current = null;  // 2026-08-04：待移除旧主图 series，chart.remove() 时一并销毁
-      volumeSeriesRef.current = null;  // 2026-07-31：成交量 overlay ref
-      prosticksPrimRef.current = null;
-      ichimokuPrimRef.current = null;
-      drawingMgrRef.current = null;
-      overlaySeriesRef.current = [];
-      paneSeriesMapRef.current = new Map();
-      barsRef.current = [];
-      lowerResultsRef.current.clear();
-      setTextBoxes([]);
-      setSelectedTextBox(null);
-      setEditingTextBox(null);
-      delete (window as any).__chartZoom;
-      // 2026-08-05：清理触屏切换标志, 避免卸载残留污染下次挂载后的设置面板操作
-      delete (window as any).__mobileLowerTap;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  // ---- 数据加载（code/interval/decimals 变化时全量重建）----
-  // 2026-08-04（0感切换优化）：chartType 不再触发本 effect —— 切换图表类型时数据未变，
-  // 重新拉 bars + 全量重建副图 pane（removePane→重建）会造成"pane 从 1 到 2"的闪烁；
-  // 类型切换走下方独立的 [chartType] effect（用缓存 bars 同步重建主图，副图 pane 不动）。
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      if (!chartRef.current) return;
-      // 2026-08-06：仅首次加载显示全屏 loading — 与 getBars 并行等待 INITIAL_LOADING_MIN_MS,
-      // 让 loading 至少可见一段演示时长 (接口通常更快, 不加会一闪而过)。
-      const isFirstLoad = !initialLoadedRef.current;
-      try {
-        const bars = await Promise.all([
-          marketApi.getBars(props.code, props.interval, 300, false),
-          isFirstLoad ? sleep(INITIAL_LOADING_MIN_MS) : Promise.resolve(),
-        ]).then(([bars]) => bars);
-        if (cancelled) return;
-        barsRef.current = bars;
-        renderMainSeries(bars, props.chartType, props.decimals);
-        // 加载叠加指标
-        loadOverlayIndicator(props.upper, props.code, props.interval, props.upperParams);
-        // 加载副图指标 (多选)
-        loadLowerIndicators(props.lower, props.code, props.interval);
-        // 更新绘图管理器的 series 引用
-        if (mainSeriesRef.current && drawingMgrRef.current) {
-          drawingMgrRef.current.series = mainSeriesRef.current;
-        }
-        // 重置绘图状态 (切换品种时清空, 避免错位)
-        drawingMgrRef.current?.setTool(TOOL.NONE);
-      } catch (e) {
-        console.error('加载数据失败', e);
-        // 2026-08-05：K 线加载失败不再静默 — 用户可见提示, 可通过工具栏/顶栏刷新按钮重试
-        message.error(t('LoadFailed'));
-      } finally {
-        // 2026-08-06：成功/失败都解除首屏 loading (组件卸载或参数切换时跳过)
-        if (!cancelled && isFirstLoad && !initialLoadedRef.current) {
-          initialLoadedRef.current = true;
-          setInitialLoading(false);
-        }
-      }
-    })();
-    return () => { cancelled = true; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [props.code, props.interval, props.decimals]);
-
-  // ---- 图表类型切换（0感）----
-  // 2026-08-04：数据未变，仅用缓存 bars 同步重建主图 series（renderMainSeries 内部
-  // 先建新 series 再移除旧 series，pane 结构不变），副图 pane / 叠加 series 完全不动。
-  // 唯一例外：Ichimoku 的 primitive 挂在主图 series 上，随旧 series 销毁需重建（其余叠加指标
-  // 是独立 series 保留即可）。
-  useEffect(() => {
-    if (!chartRef.current || barsRef.current.length === 0) return;
-    renderMainSeries(barsRef.current, props.chartType, props.decimals);
-    if (props.upper === UPPER_TECH.IKH) {
-      loadOverlayIndicator(props.upper, props.code, props.interval, props.upperParams);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [props.chartType]);
-
-  // ---- 叠加指标切换 ----
-  useEffect(() => {
-    loadOverlayIndicator(props.upper, props.code, props.interval, props.upperParams);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [props.upper]);
-
-  // ---- 副图指标切换 (多选) ----
-  // 2026-08-04：拆成两个 effect：
-  //   - 数据加载大 effect [code, interval, chartType, decimals]：code/interval 变化时全量重建副图
-  //     （2026-08-04 删除冗余的 [code, interval] 独立 effect —— 它与大 effect 重复调用
-  //     loadLowerIndicators 造成初始加载并发竞态：两个全量重建交错执行，panesLen 出现 0/1/2 抖动，
-  //     是切换类型残留 series 的诱因之一；大 effect 已覆盖全部变化场景）
-  //   - [lower]：精细增/删（其他副图 series 保持原样，removeSeries+removePane / addSeries+setData）
-  // 顺序变化由 handleMoveLower 走 panes.moveTo() 即时切换，不走这里。
-  useEffect(() => {
-    const curr = props.lower;
-
-    // 2026-08-04：首次挂载 / code/interval 变化的全量重建还在 in-flight 时，[lower] effect 必须跳过。
-    // 否则会和 loadLowerIndicators 并发重复创建同一个 pane（导致 priceScale index 错误）。
-    if (!lowerInitializedRef.current) return;
-
-    // 2026-08-05：消费触屏切换标志（一次性）— 图表内触屏切换副图入口 (MobileLayout.tapReplaceLower)
-    // 会设置 __mobileLowerTap；设置面板入口不设置。触屏切换：不重置主图缩放、不重绘主图叠加指标。
-    // 统一在这里消费（无论走替换/删除/新增哪条分支），避免标志残留污染后续设置面板操作。
-    const isTapSwitch = (window as any).__mobileLowerTap !== undefined;
-    if (isTapSwitch) delete (window as any).__mobileLowerTap;
-
-    // 2026-08-05：触屏切换时 params effect 先以「旧 lower + 新参数」跑了一帧（App 对 lower 有
-    // 16ms debounce），wsIndicatorsDisabledRef 可能被误置 true 且 params effect 不会重跑 —
-    // 这里用新 lower 重算修正（默认参数 → false，WS 指标增量恢复）。
-    wsIndicatorsDisabledRef.current =
-      !isDefaultParams('upper', props.upper, props.upperParams) ||
-      curr.some((t) => !isDefaultParams('lower', t, props.lowerParams));
-
-    // 2026-08-05：触屏切换时本帧 WS 重订阅会触发后端重推全量 INDICATORS（含 upper）—
-    // 在本 effect 执行时（WS 重订阅 effect 之前）同步武装一次性抑制标志，消除上一轮
-    // "calculate 完成后才武装"的竞态（WS 推送先到导致抑制落空、叠加指标被历史首点拉回重绘）。
-    if (isTapSwitch && props.upper !== UPPER_TECH.NONE) {
-      suppressUpperRef.current = true;
-    }
-
-    const prev = lastLowerRef.current;
-    const prevSet = new Set(prev);
-    const currSet = new Set(curr);
-
-    // 找新增 / 删除
-    const added = curr.filter((t) => !prevSet.has(t));
-    const removed = prev.filter((t) => !currSet.has(t));
-
-    // 2026-08-04：单删单增 → 原地替换（移动端点击副图循环切换）——
-    // 复用同一 pane（空间固定、无过渡动画）: 先异步加载新指标（旧指标继续显示）,
-    // 就绪后同一帧 addSeries 新 + removeSeries 旧, pane 始终非空不被自动移除。
-    // 不再走"删除 pane → 骨架淡出 → 重建 pane"的路径, 副图高度全程不变。
-    if (removed.length === 1 && added.length === 1) {
-      lastLowerRef.current = [...curr];
-      replaceLowerPane(removed[0], added[0], props.code, props.interval, isTapSwitch);
-      return;
-    }
-
-    // 2026-07-30：删除走**精细路径**（removeLowerPane 用 series 引用反查，只删目标 pane）。
-    // 之前全量重建（清空→逐个重建）会造成"从 0 逐个长出 pane"的渐变动画；
-    // 精细删除其他 pane 原样不动，无动画。
-    removed.forEach((tech) => removeLowerPane(tech));
-
-    // 同步 lastLowerRef（删除已在 removeLowerPane 内 filter，这里覆盖为最终顺序）
-    lastLowerRef.current = [...curr];
-
-    if (removed.length > 0) {
-      // 仅删除时同步刷新布局 (pane 数量变化, 拉伸权重需重新应用)
-      syncPaneLayout();
-      // 2026-08-05：触屏切换不重置主图时间轴缩放 (设置面板入口保持原行为)
-      if (!isTapSwitch) requestAnimationFrame(fitTimeScaleDefault);
-    }
-
-    // 异步新增：先标记 loading，再逐个串行 addSeries（不闪烁，保持精细路径）
-    // 2026-07-30：必须串行！addLowerPane 内部用 chart.panes().length 作为真实 paneIndex，
-    // 并发时多个任务读到相同 length，后加的指标会挤进同一个 pane 导致 series 互相覆盖
-    if (added.length > 0) {
-      // 2026-07-30：版本锁 —— 本轮独占，props.lower 再次变化时新 effect 递增版本，
-      // 本轮循环检测到过期立即放弃，由新 effect 重新计算 diff，避免两条链交错
-      const version = ++lowerApplyVersionRef.current;
-      // 新 paneIndex 取决于：删除后剩余的 lastLowerRef + 1
-      const baseIdx = lastLowerRef.current.length + 1;
-      setLowerLoadingStates((p) => {
-        const next = new Set(p);
-        added.forEach((t) => next.add(t));
-        return next;
-      });
-      (async () => {
-        for (let i = 0; i < added.length; i++) {
-          if (lowerApplyVersionRef.current !== version) return; // 过期链放弃，由新 effect 处理
-          await addLowerPane(added[i], baseIdx + i, props.code, props.interval, isTapSwitch);
-        }
-      })().catch((e) => console.error('新增副图串行失败', e));
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [props.lower]);
-
-  // 2026-07-29：同步每个 pane 相对 chart-container 顶部的像素偏移，用于副图标题浮层定位
-  // 2026-07-30：提取为可复用函数 —— 精细删除后立即调用，避免浮层在 pane 重排后位置错乱/丢失
+  // 包装 updatePaneTops：既调 hook 内部逻辑，也同步 ChartPanel 顶层的 paneLayouts state
+  // 2026-09-09：单次遍历 panes，仅一次 setPaneLayouts（原先两次遍历 + 两次 setState）
   const updatePaneTops = useCallback(() => {
+    updatePaneTopsFromHook();
     const chart = chartRef.current;
     const container = containerRef.current;
     if (!chart || !container) return;
     const panes = chart.panes();
     const containerRect = container.getBoundingClientRect();
-    const tops = panes.map((p) => {
-      const el = p.getHTMLElement();
-      if (!el) return 0;
-      return el.getBoundingClientRect().top - containerRect.top;
-    });
-    setPaneTops(tops);
-    // 2026-08-04：同步记录每个 pane 的 top+height（点击副图切换指标用）
-    setPaneRects(
+    setPaneLayouts(
       panes.map((p) => {
         const el = p.getHTMLElement();
-        const rect = el ? el.getBoundingClientRect() : null;
-        return rect ? { top: rect.top - containerRect.top, height: rect.height } : { top: 0, height: 0 };
+        if (!el) return { top: 0, height: 0 };
+        const rect = el.getBoundingClientRect();
+        return { top: rect.top - containerRect.top, height: rect.height };
       }),
     );
+  }, [updatePaneTopsFromHook]);
+
+  // 2026-09-08：useCanvasCrosshair 抽离后未接入 — pointer 路由与画线/副图 cycle 强耦合
+  // 跨 hook 边界传递 lowerTapStartRef 复杂度反而上升, 暂保留 ChartPanel 顶层实现。
+  // 见 hooks/useCanvasCrosshair.ts 中的 TODO 注释。
+
+  // ===== Hook #2: 实时数据（订阅放最后，依赖 loadOverlayIndicator）=====
+
+  useRealtimeData({
+    chartRef, mainSeriesRef, volumeSeriesRef, prosticksPrimRef, ichimokuPrimRef,
+    overlaySeriesRef, barsRef, paneSeriesMapRef, lowerResultsRef, fullscreenRef,
+    wsIndicatorsDisabledRef, suppressUpperRef, refreshAllRef,
+    refreshLowerValues,
+    palette: props.palette,
+    code: props.code,
+    interval: props.interval,
+    upper: props.upper,
+    lower: props.lower,
+    chartType: props.chartType,
+  });
+
+  // ===== 触摸平移选项 =====
+  // 2026-09-01：移动端画线交互 hook — tap 定点 / 选中已画对象 / 步骤提示 / 完成提示。
+  const applyTouchPanOptions = useCallback(() => {
+    const chart = chartRef.current;
+    const c = containerRef.current;
+    if (!chart || !c) return;
+    const isPhoneLayout = mobileRef.current || fullscreenRef.current;
+    const toolActive = drawingMgrRef.current?.getActiveTool() !== TOOL.NONE;
+    const drawMode = mobileDrawModeRef.current;
+    chart.applyOptions({
+      handleScroll: {
+        mouseWheel: !isPhoneLayout,
+        pressedMouseMove: true,
+        horzTouchDrag: isPhoneLayout ? !(toolActive && !drawMode) : true,
+        vertTouchDrag: !isPhoneLayout,
+      },
+    });
   }, []);
 
+  // 2026-09-02: 锚点拖拽平移开关
+  const handleAnchorDragPan = useCallback((dragging: boolean) => {
+    const chart = chartRef.current;
+    if (!chart) return;
+    if (dragging) {
+      chart.applyOptions({ handleScroll: { horzTouchDrag: false, vertTouchDrag: false } });
+    } else {
+      applyTouchPanOptions();
+    }
+  }, [applyTouchPanOptions]);
+
+  const drawInteraction = useChartDrawInteraction({
+    drawingMgrRef, chartRef, containerRef, mainSeriesRef, paneRects: paneLayouts,
+    mobileDrawMode: props.mobileDrawMode === true,
+    tool: props.tool,
+    onToolChange: props.onToolChange,
+    onLimitReached: () => { message.warning(t('LimitReached')); },
+    onDrawDone: () => { /* 'done' 提示由 hook 内置 2s 自动消失, 无需外层 message */ },
+    onAnchorDragPan: handleAnchorDragPan,
+    onTextBoxCreated: (idx) => {
+      setSelectedTextBox(idx);
+      setEditingTextBox(idx);
+    },
+    onTextBoxSelected: (idx) => {
+      setSelectedTextBox(idx);
+      if (editingTextBox !== null && editingTextBox !== idx) {
+        setEditingTextBox(null);
+      }
+    },
+  });
+
+  // ===== 数据加载（code/interval/decimals 变化时全量重建）====
+  // 2026-09-04：loadMainData 抽出来可由 retryLoad / useLowerPanes 复用
+  const loadTokenRef = useRef(0);
+  const loadMainData = useCallback(async () => {
+    const chart = chartRef.current;
+    if (!chart) return;
+    const myToken = ++loadTokenRef.current;
+    const isFirstLoad = !initialLoadedRef.current;
+    setMainDataState('loading');
+    try {
+      const bars = await Promise.all([
+        marketApi.getBars(props.code, props.interval, 300, false),
+        isFirstLoad ? sleep(INITIAL_LOADING_MIN_MS) : Promise.resolve(),
+      ]).then(([bars]) => bars);
+      if (loadTokenRef.current !== myToken) return;
+      if (!bars || bars.length === 0) {
+        setMainDataState('empty');
+        message.warning(t('NoData'));
+        return;
+      }
+      barsRef.current = bars;
+      renderMainSeries(bars, props.chartType, props.decimals);
+      // 加载叠加指标
+      void loadOverlayIndicator(props.upper, props.code, props.interval, props.upperParams);
+      // 加载副图指标 (多选)
+      await loadLowerIndicatorsFull(props.code, props.interval);
+      // 更新绘图管理器的 series 引用
+      if (mainSeriesRef.current && drawingMgrRef.current) {
+        drawingMgrRef.current.series = mainSeriesRef.current;
+      }
+      drawingMgrRef.current?.setTool(TOOL.NONE);
+      setMainDataState('idle');
+    } catch (e) {
+      if (loadTokenRef.current !== myToken) return;
+      console.error('加载数据失败', e);
+      message.error(t('LoadFailed'));
+      setMainDataState('error');
+    } finally {
+      if (isFirstLoad && !initialLoadedRef.current) {
+        initialLoadedRef.current = true;
+        setInitialLoading(false);
+      }
+    }
+    // 2026-09-09：补全 deps — 原数组缺 lowerParams / t / renderMainSeries / loadOverlayIndicator /
+    // loadLowerIndicatorsFull / setMainDataState / setInitialLoading，且 props.decimals 重复一次（typo）。
+    // 现全部显式列出，移除 eslint-disable 注释。
+  }, [props.code, props.interval, props.decimals, props.chartType,
+      props.upper, props.upperParams, props.lower, props.lowerParams,
+      t, renderMainSeries, loadOverlayIndicator, loadLowerIndicatorsFull,
+      setMainDataState, setInitialLoading]);
+  useEffect(() => {
+    void loadMainData();
+  }, [loadMainData]);
+
+  const retryLoad = useCallback(() => {
+    void loadMainData();
+  }, [loadMainData]);
+
+  // ===== 图表类型切换（0感）====
+  useEffect(() => {
+    if (!chartRef.current || barsRef.current.length === 0) return;
+    renderMainSeries(barsRef.current, props.chartType, props.decimals);
+    if (props.upper === 5 /* UPPER_TECH.IKH */) {
+      void loadOverlayIndicator(props.upper, props.code, props.interval, props.upperParams);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [props.chartType]);
+
+  // ===== paneTops ResizeObserver 监听 =====
   useEffect(() => {
     const chart = chartRef.current;
     const container = containerRef.current;
     if (!chart || !container) return;
 
     const updatePositions = () => updatePaneTops();
-
     updatePositions();
 
-    // 用 ResizeObserver 监听每个 pane DOM 元素的变化（重排、缩放副图时）
     const ro = new ResizeObserver(updatePositions);
     const panes = chart.panes();
     const observed: Element[] = [];
@@ -652,64 +330,47 @@ export default function ChartPanel(props: ChartPanelProps) {
       }
     });
 
-    // 横向滚动/缩放不改变 pane top（pane 上下不变），但 separator 拖拽会改变 pane 高度
-    // subscribeVisibleTimeRangeChange 也会触发（保守起见）
     const ts = chart.timeScale();
     ts.subscribeVisibleTimeRangeChange(updatePositions);
 
-    // 容器尺寸变化
     const onResize = () => updatePositions();
     window.addEventListener('resize', onResize);
 
     return () => {
       ro.disconnect();
       window.removeEventListener('resize', onResize);
-      // unsubscribeVisibleTimeRangeChange 不需要 — chart.remove() 时自动解绑
     };
-  }, [props.lower.length]); // 副图数量变化时重挂
+  }, [props.lower.length, updatePaneTops]);
 
-  // 2026-07-29：副图值格式化（响应 lowerResultsRef 变化；key=tech）
-  const refreshLowerValues = useCallback(() => {
-    const next = new Map<number, string>();
-    lowerResultsRef.current.forEach((result, tech) => {
-      next.set(tech, formatLastValue(result, props.decimals));
-    });
-    setLowerValues(next);
-  }, [props.decimals]);
-
-  // ---- 绘图工具切换 ----
+  // ===== 绘图工具切换 =====
   useEffect(() => {
+    if (LIMITED_TOOLS.has(props.tool) && (drawingCounts[props.tool] ?? 0) >= MAX_PER_TYPE) {
+      message.warning(t('LimitReached'));
+      props.onToolChange(TOOL.NONE);
+      return;
+    }
     drawingMgrRef.current?.setTool(props.tool);
     updateToolHint(props.tool);
-    // 2026-08-03：工具激活时立即禁用触摸平移 (horzTouchDrag=false),
-    // 无需等 resize —— 否则选中工具后手指拖动仍会平移图表而非绘图预览。
-    const chart = chartRef.current;
-    const c = containerRef.current;
-    if (chart && c) {
-      const isPhoneLayout = mobileRef.current || fullscreenRef.current;
-      const toolActive = drawingMgrRef.current?.getActiveTool() !== TOOL.NONE;
-      chart.applyOptions({
-        handleScroll: {
-          mouseWheel: !isPhoneLayout,
-          pressedMouseMove: true,
-          horzTouchDrag: isPhoneLayout ? !toolActive : true,
-          vertTouchDrag: !isPhoneLayout,
-        },
-      });
-    }
+    if (props.tool !== TOOL.NONE) chartRef.current?.clearCrosshairPosition();
+    applyTouchPanOptions();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [props.tool]);
+  }, [props.tool, props.mobileDrawMode]);
 
-  // 2026-09-01：移动端画线全局显隐 — 同步到 DrawingManager 与 TextBoxLayer。
-  // 默认 true (显示)；抽屉中的"隐藏/显示画线"按钮驱动 props.drawingsVisible 切换。
+  // ===== 画线全局显隐 =====
   useEffect(() => {
     drawingMgrRef.current?.setVisible(props.drawingsVisible !== false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [props.drawingsVisible]);
 
-  // ---- 横屏全屏: 只显示主图 ----
-  // 2026-08-04：进入/退出全屏即时重排 pane, 不依赖 resize。
-  // 2026-08-05：改为真正隐藏/恢复副图 — 移除 series → 空 pane 自动删除 (主图占满 100%,
-  // 无 2px 细缝); 退出全屏从 lowerResultsRef 缓存重建, 零网络请求、无闪烁。
+  const clearDrawSelection = drawInteraction.clearSelection;
+  useEffect(() => {
+    if (props.drawingsVisible === false) {
+      clearDrawSelection();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [props.drawingsVisible, clearDrawSelection]);
+
+  // ===== 横屏全屏 =====
   useEffect(() => {
     if (props.fullscreen) {
       hideLowerPanesForFullscreen();
@@ -719,44 +380,11 @@ export default function ChartPanel(props: ChartPanelProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [props.fullscreen]);
 
-  // ---- 指标参数变化 (移动端设置面板接入) ----
-  // 2026-08-04：upperParams/lowerParams 变化 → 用新参数重算对应指标：
-  // - 叠加指标 loadOverlayIndicator (重建 series)
-  // - 副图指标 resetLowerPane 精细重置 (pane 不动, 无闪烁)
-  // 同时维护 wsIndicatorsDisabledRef：任一指标参数非默认 → 忽略 WS 指标增量。
-  const paramsEffectInitializedRef = useRef(false);
-  useEffect(() => {
-    const disabled =
-      !isDefaultParams('upper', props.upper, props.upperParams) ||
-      props.lower.some((t) => !isDefaultParams('lower', t, props.lowerParams));
-    wsIndicatorsDisabledRef.current = disabled;
-    // 首次挂载由数据加载 effect 完成全量加载, 跳过重算
-    if (!paramsEffectInitializedRef.current) {
-      paramsEffectInitializedRef.current = true;
-      return;
-    }
-    if (!chartRef.current) return;
-    // 2026-08-05：触屏切换副图时 lowerParams 已切到新指标默认值，但 props.lower 仍是旧指标
-    // (App 对 lower 有 16ms debounce) — 此时重算会误用「旧指标+新参数」重载旧 pane，
-    // 并重建主图叠加指标（loadOverlayIndicator，IKH 还会重置缩放）。
-    // 触屏切换必须跳过 (主图指标/缩放不受影响)；设置面板入口无标志，保持原行为。
-    // 标志由 [lower] effect 统一消费，这里只读不删。
-    if ((window as any).__mobileLowerTap !== undefined) return;
-    if (props.upper !== UPPER_TECH.NONE) {
-      loadOverlayIndicator(props.upper, props.code, props.interval, props.upperParams);
-    }
-    props.lower.forEach((tech) => {
-      void resetLowerPane(tech, props.code, props.interval);
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [props.upperParams, props.lowerParams]);
-
-  // ---- 缩放/平移/导出 ----
+  // ===== 缩放/平移/导出 =====
   useEffect(() => {
     props.registerExport(() => {
       if (chartRef.current) {
         chartRef.current.takeScreenshot().toDataURL('image/png');
-        // 触发下载
         const url = chartRef.current.takeScreenshot().toDataURL('image/png');
         const a = document.createElement('a');
         a.href = url;
@@ -767,1018 +395,43 @@ export default function ChartPanel(props: ChartPanelProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [props.code]);
 
-  // ---- 2026-08-05：注册刷新入口 (工具栏/顶栏刷新按钮 + WS 重连重拉共用 refreshAllData) ----
+  // ===== 注册刷新入口 =====
   useEffect(() => {
     props.registerRefresh?.(() => { void refreshAllRef.current?.(); });
     return () => props.registerRefresh?.(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // ---- 2026-07-30：撤销 / 回滚 ----
-  // 1) 监听来自 App 的撤销事件 (Ctrl+Z / toolbar / 移动按钮)
-  useEffect(() => {
-    const handler = () => {
-      const mgr = drawingMgrRef.current;
-      if (!mgr) return;
-      mgr.undoLast();
-      props.registerCanUndo(mgr.canUndo());
-    };
-    window.addEventListener('chart:undo', handler);
-    return () => window.removeEventListener('chart:undo', handler);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  // ---- 2026-08-03：取消当前绘制 (移动端"取消"按钮 / 触摸端右键替代) ----
-  useEffect(() => {
-    const handler = () => {
-      const mgr = drawingMgrRef.current;
-      if (!mgr) return;
-      const cancelled = mgr.cancelDrawing();
-      // 移动端"取消"按钮语义: 有进行中的绘制则取消本次, 否则退出当前工具
-      // (等效于重新选择"无工具"), 避免触屏用户无法回到常规浏览状态。
-      if (!cancelled && mgr.getActiveTool() !== TOOL.NONE) {
-        mgr.setTool(TOOL.NONE);
-        props.onToolChange(TOOL.NONE);
-      }
-    };
-    window.addEventListener('chart:cancel-drawing', handler);
-    return () => window.removeEventListener('chart:cancel-drawing', handler);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  // 2) 当 props.canUndo 与 mgr 实际状态不一致时, 主动同步 (防止 React state 滞后)
-  useEffect(() => {
-    const mgr = drawingMgrRef.current;
-    if (!mgr) return;
-    const real = mgr.canUndo();
-    if (real !== props.canUndo) props.registerCanUndo(real);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+  // ===== 撤销 / 取消 / 清除 (含 canUndo/canClear 同步) =====
+  // 2026-09-08：抽到 useChartCommandBus — 合并 4 个 window 事件 + 修复 3 个反模式 effect
+  //   (原 3 个 0 依赖空 deps 改为 DrawingManager.subscribeObjectsChanged 订阅)
+  useChartCommandBus({
+    drawingMgrRef,
+    onToolChange: props.onToolChange,
   });
 
-  // ---- 2026-07-31：清除所有 ----
-  // 1) 监听来自 App 的"清除所有"事件 (Toolbar 扫帚按钮触发)
-  useEffect(() => {
-    const handler = () => {
-      const mgr = drawingMgrRef.current;
-      if (!mgr) return;
-      mgr.clearAllDrawings();
-      // 同步通知父组件两个按钮的可用态
-      props.registerCanUndo(mgr.canUndo());
-      props.registerCanClear(mgr.canUndo());
-    };
-    window.addEventListener('chart:clear-all', handler);
-    return () => window.removeEventListener('chart:clear-all', handler);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  // 2) 初始化时主动把 canClear = canUndo 同步给 App (mgr 刚 new 出来, objects 为空 → false)
-  useEffect(() => {
-    const mgr = drawingMgrRef.current;
-    if (!mgr) return;
-    props.registerCanClear(mgr.canUndo());
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  // 3) 任何时候 mgr.canUndo() 与 props.canUndo 不一致时, 同步两个状态 (避免 React 滞后)
-  useEffect(() => {
-    const mgr = drawingMgrRef.current;
-    if (!mgr) return;
-    const real = mgr.canUndo();
-    if (real !== props.canUndo) {
-      props.registerCanUndo(real);
-      props.registerCanClear(real);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  });
-
-  // ---- 主图数据映射 (renderMainSeries 与刷新/重连重拉共用) ----
-  // 2026-08-05：从 renderMainSeries 提取 — 刷新时对现有 series 就地 setData,
-  // 不重建 series (保持时间轴缩放与绘图 primitive 引用), 故数据映射抽出来共用。
-  const buildMainSeriesData = (bars: Bar[], chartType: number): any[] => {
-    if (chartType === TYPE.LINE || chartType === TYPE.MODAL_LINE) {
-      return bars
-        .filter((b) => b.h > 0)
-        .map((b) => ({
-          time: b.time as Time,
-          value: chartType === TYPE.MODAL_LINE ? b.mp : b.c,
-        }))
-        // 模态线跳过 mp=0 的点
-        .filter((d) => chartType !== TYPE.MODAL_LINE || (d.value as number) > 0);
-    }
-    if (chartType === TYPE.AREA) {
-      return bars.filter((b) => b.h > 0).map((b) => ({ time: b.time as Time, value: b.c }));
-    }
-    // BAR / BAR_MODAL / CANDLE / PROSTICKS / MAIN_VOLUME 均为 OHLC 数组
-    return bars.filter((b) => b.h > 0).map((b) => ({
-      time: b.time as Time, open: b.o, high: b.h, low: b.l, close: b.c,
-    }));
-  };
-
-  /** MAIN_VOLUME 叠加成交量的数据映射 (renderMainSeries 与刷新共用) */
-  const buildVolumeData = (bars: Bar[], palette: NationPalette): any[] =>
-    bars.filter((b) => b.h > 0).map((b) => ({
-      time: b.time as Time,
-      value: b.v,
-      color: b.c >= b.o ? palette.bar.upColor : palette.bar.downColor,
-    }));
-
-  // ---- 渲染主图序列 ----
-  const renderMainSeries = (bars: Bar[], chartType: number, decimals: number) => {
-    const chart = chartRef.current!;
-    // 2026-07-31：先清理上一轮可能存在的 volume overlay series（HMR / 切换 chartType 路径）
-    if (volumeSeriesRef.current) {
-      try { chart.removeSeries(volumeSeriesRef.current); } catch (_) { /* ignore */ }
-      volumeSeriesRef.current = null;
-    }
-    // 移除旧的主序列与 primitive
-    if (mainSeriesRef.current) {
-      // 2026-07-31：先显式 detach 旧 primitive，再 removeSeries。
-      // 旧代码只置 null ref、没从 series 上 detach primitive，切换 chartType 时
-      // 旧 primitive 仍短暂挂在旧 series 上，且 dispose 时机依赖 lightweight-charts 内部，
-      // HMR 路径下可能不一致。显式 detach 让状态更可预测。
-      if (prosticksPrimRef.current) {
-        mainSeriesRef.current.detachPrimitive(prosticksPrimRef.current);
-        prosticksPrimRef.current = null;
-      }
-      if (ichimokuPrimRef.current) {
-        mainSeriesRef.current.detachPrimitive(ichimokuPrimRef.current);
-        ichimokuPrimRef.current = null;
-      }
-      if (drawingMgrRef.current) {
-        mainSeriesRef.current.detachPrimitive(drawingMgrRef.current);
-        // 注意：drawingMgrRef 是单例，不置 null — 后续会重新 attach 到新 series
-      }
-      // 2026-08-04（修复切换类型平线）：不在此 removeSeries —— 延后到新 series 创建后再移除。
-      // 原因：v5 在 pane 变空时自动移除该 pane；若先移除主图 series，且当前存在副图 pane 时，
-      // 副图 pane（原 index 1）会被重编号为 0，随后创建的新主图 series 将与副图 series
-      // 挤进同一 pane（移动端默认带副图 → 切换类型后主图被成交量柱撑爆价格刻度 → 平线/点）。
-      oldMainSeriesRef.current = mainSeriesRef.current;
-      mainSeriesRef.current = null;
-    } else {
-      // mainSeriesRef 已被 cleanup 重置（正常路径），但 ref 还可能指向旧 prim
-      if (prosticksPrimRef.current) prosticksPrimRef.current = null;
-      if (ichimokuPrimRef.current) ichimokuPrimRef.current = null;
-    }
-
-    const priceFormat = {
-      type: 'price' as const,
-      precision: decimals,
-      minMove: 1 / Math.pow(10, decimals),
-    };
-
-    // 判断是否需要 Prosticks 形态
-    const isProsticks = chartType === TYPE.PROSTICKS || chartType === TYPE.BAR_MODAL || chartType === TYPE.MODAL_LINE;
-
-    // 根据图表类型创建序列
-    let series: ISeriesApi<any>;
-    if (chartType === TYPE.LINE || chartType === TYPE.MODAL_LINE) {
-      series = chart.addSeries(LineSeries, {
-        color: chartType === TYPE.MODAL_LINE ? '#FF0000' : '#1E90FF',
-        lineWidth: 1,
-        priceFormat,
-      });
-      series.setData(buildMainSeriesData(bars, chartType));
-    } else if (chartType === TYPE.AREA) {
-      series = chart.addSeries(AreaSeries, {
-        lineColor: '#1E90FF',
-        topColor: 'rgba(96, 176, 255, 0.4)',
-        bottomColor: 'rgba(96, 176, 255, 0.05)',
-        lineWidth: 1,
-        priceFormat,
-      });
-      series.setData(buildMainSeriesData(bars, chartType));
-    } else if (chartType === TYPE.BAR || chartType === TYPE.BAR_MODAL) {
-      series = chart.addSeries(BarSeries, {
-        upColor: props.palette.bar.upColor,
-        downColor: props.palette.bar.downColor,
-        thinBars: false,
-        priceFormat,
-      });
-      series.setData(buildMainSeriesData(bars, chartType));
-    } else {
-      // CANDLE (默认) + PROSTICKS 都用 candlestick 作为底
-      series = chart.addSeries(CandlestickSeries, {
-        upColor: props.palette.candle.upColor,
-        downColor: props.palette.candle.downColor,
-        borderUpColor: props.palette.candle.borderUpColor,
-        borderDownColor: props.palette.candle.borderDownColor,
-        wickUpColor: props.palette.candle.wickUpColor,
-        wickDownColor: props.palette.candle.wickDownColor,
-        priceFormat,
-      });
-      series.setData(buildMainSeriesData(bars, chartType));
-    }
-    mainSeriesRef.current = series;
-
-    // 2026-08-04（修复切换类型平线）：新主图 series 已挂到 pane 0，此刻移除旧 series
-    // 不会触发"pane 变空自动移除"（pane 0 仍有新 series），副图 pane 索引保持不变。
-    if (oldMainSeriesRef.current) {
-      try {
-        chart.removeSeries(oldMainSeriesRef.current);
-      } catch (_) { /* ignore */ }
-      oldMainSeriesRef.current = null;
-    }
-
-    // Prosticks 形态: 附加自定义 primitive (透明 K 线 + 形态叠加)
-    if (isProsticks) {
-      const prim = new ProsticksPrimitive(chart, series, {
-        enabled: true,
-        showActiveRegion: chartType === TYPE.PROSTICKS || chartType === TYPE.BAR_MODAL,
-        showExtremeTail: chartType === TYPE.PROSTICKS,
-        showModalPoint: chartType === TYPE.PROSTICKS || chartType === TYPE.BAR_MODAL || chartType === TYPE.MODAL_LINE,
-        decimals,
-      });
-      prim.setData(bars);
-      series.attachPrimitive(prim);
-      prosticksPrimRef.current = prim;
-    }
-
-    // 绘图管理器: 重新附加到新序列 (旧序列已 removeSeries 会自动解绑)
-    if (drawingMgrRef.current) {
-      drawingMgrRef.current.series = series;
-      drawingMgrRef.current.decimals = decimals;
-      // 关键: 必须把 DrawingManager 作为 primitive 附加到序列, 否则 draw() 不会被调用
-      series.attachPrimitive(drawingMgrRef.current);
-    }
-
-    // 2026-07-31：主图叠加成交量直方图（仅 MAIN_VOLUME 类型）
-    // 挂在主图 pane（paneIndex 0）的独立 price scale，占主图底部 ~15% 高度，不显示坐标轴
-    if (chartType === TYPE.MAIN_VOLUME) {
-      try {
-        const volumeScaleId = 'volume_overlay';
-        const volSeries = chart.addSeries(
-          HistogramSeries,
-          {
-            priceFormat: { type: 'volume' },
-            priceScaleId: volumeScaleId,
-            color: props.palette.bar.upColor,
-          },
-          0,
-        );
-        volSeries.setData(buildVolumeData(bars, props.palette));
-        // 把成交量压到主图底部 15%，并隐藏独立 price scale 的刻度文字
-        chart.priceScale(volumeScaleId).applyOptions({
-          scaleMargins: { top: 0.85, bottom: 0 },
-          visible: false,
-        });
-        volumeSeriesRef.current = volSeries;
-      } catch (e) {
-        console.warn('[ChartPanel] 创建成交量 overlay 失败:', e);
-      }
-    }
-
-    // 2026-07-30: fitContent 推迟到下一帧, 确保 price scale 已基于 setData
-    // 数据完成首次 auto-scale 后再触发布局, 避免 primitive 在 priceToCoordinate
-    // 返回画布几何中心时被绘制,造成"红点全在水平线"的视觉异常。
-    requestAnimationFrame(fitTimeScaleDefault);
-  };
-
-  // 2026-07-21 22:47:36：把完整实时 Bar 转为当前主图类型需要的 update 数据。
-  const toMainSeriesPoint = (bar: Bar, chartType: number): any | null => {
-    if (chartType === TYPE.LINE || chartType === TYPE.MODAL_LINE || chartType === TYPE.AREA) {
-      const value = chartType === TYPE.MODAL_LINE ? bar.mp : bar.c;
-      return value > 0 ? { time: bar.time as Time, value } : null;
-    }
-    return { time: bar.time as Time, open: bar.o, high: bar.h, low: bar.l, close: bar.c };
-  };
-
-  const handleRealtimeBar = (message: RealtimeBarMessage): void => {
-    const selected = liveSelectionRef.current;
-    if (message.code !== selected.code || message.interval !== selected.interval) return;
-    const bars = barsRef.current;
-    const last = bars[bars.length - 1];
-    if (!last || message.bar.time > last.time) {
-      bars.push(message.bar);
-      if (bars.length > 300) bars.shift();
-    } else if (message.bar.time === last.time) {
-      bars[bars.length - 1] = message.bar;
-    } else {
-      return;
-    }
-    const point = toMainSeriesPoint(message.bar, selected.chartType);
-    if (point && mainSeriesRef.current) mainSeriesRef.current.update(point);
-    // 2026-07-31：主图叠加成交量 — 实时增量同步更新最末点高度与颜色
-    if (volumeSeriesRef.current && message.bar.v > 0) {
-      volumeSeriesRef.current.update({
-        time: message.bar.time as Time,
-        value: message.bar.v,
-        color: message.bar.c >= message.bar.o
-          ? props.palette.bar.upColor
-          : props.palette.bar.downColor,
-      });
-    }
-    prosticksPrimRef.current?.setData(bars);
-  };
-
-  const applyIndicatorDelta = (
-    seriesList: ISeriesApi<any>[], result: IndicatorResult, indicatorType?: number, tech?: number,
-  ): void => {
-    result.series.forEach((item, index) => {
-      const series = seriesList[index];
-      if (!series || item.data.length === 0) return;
-      // 2026-08-05：重订阅/重连后后端重推全量 INDICATORS — 快照就地整体替换。
-      // 旧逻辑只取 data[0] 做 update, 会把指标线从历史首点"拉回起点"重绘。
-      if (item.data.length > 1) {
-        const { points } = sanitizePoints(item.data);
-        if (indicatorType === LOWER_TECH.MACD && index === 2) {
-          series.setData(
-            points.map((d) => ({
-              time: d.time as Time,
-              value: d.value,
-              color: d.value >= 0 ? props.palette.overlay.up : props.palette.overlay.down,
-            })),
-          );
-        } else {
-          series.setData(points.map((d) => ({ time: d.time as Time, value: d.value })));
-        }
-        return;
-      }
-      const point = item.data[0];
-      if (!point || point.value === null) return;
-      const update: any = { time: point.time as Time, value: point.value };
-      if (indicatorType === LOWER_TECH.MACD && index === 2) {
-        update.color = point.value >= 0 ? props.palette.overlay.up : props.palette.overlay.down;
-      }
-      series.update(update);
-    });
-    // 2026-07-29：副图增量数据时更新缓存与浮层值（key=tech）
-    if (tech !== undefined) {
-      lowerResultsRef.current.set(tech, result);
-      refreshLowerValues();
-    }
-  };
-
-  const handleRealtimeIndicators = (message: RealtimeIndicatorsMessage): void => {
-    const selected = liveSelectionRef.current;
-    if (message.code !== selected.code || message.interval !== selected.interval) return;
-    // 2026-08-04：自定义参数时 WS 的 INDICATORS 增量按默认参数推送, 与展示结果不一致 — 忽略
-    // (主图 BAR 实时更新不受影响)。
-    if (wsIndicatorsDisabledRef.current) return;
-    if (message.upper?.type === selected.upper) {
-      // 2026-08-05：触屏切换副图触发的 WS 重订阅, 后端会重推全量 upper —
-      // 抑制这一次（一次性）, 避免叠加指标被历史首点 update 拉回起点重绘;
-      // 设置面板入口不抑制, 保持原行为。实时增量（最新一根）不受影响。
-      if (suppressUpperRef.current) {
-        suppressUpperRef.current = false;
-      } else {
-        applyIndicatorDelta(overlaySeriesRef.current, message.upper.result);
-        if (selected.upper === UPPER_TECH.IKH) {
-          ichimokuPrimRef.current?.applyDelta(
-            message.upper.result, barsRef.current, selected.interval <= 2,
-          );
-        }
-      }
-    }
-    message.lower.forEach((update) => {
-      // 2026-07-30：key=tech 直接取，不再 indexOf 推算 paneIndex（位置无关）
-      const seriesList = paneSeriesMapRef.current?.get(update.type) ?? [];
-      applyIndicatorDelta(seriesList, update.result, update.type, update.type);
-    });
-  };
-
-  // ---- 加载叠加指标 ----
-  useEffect(() => {
-    // 2026-07-21 22:49:10：页面打开即建立单一连接，卸载 iframe 时主动取消订阅并关闭。
-    const client = new MarketSocket({
-      onBar: handleRealtimeBar,
-      onIndicators: handleRealtimeIndicators,
-      // 2026-08-05：断线重连成功后重拉 REST 全量数据 — 补齐断线期间丢失的 K 线
-      // (WS 增量只推最新点, 无法回溯空洞) 与指标数据 (自定义参数时 WS 增量被忽略)。
-      onReconnect: () => { void refreshAllRef.current?.(); },
-    });
-    socketRef.current = client;
-    client.subscribe({
-      code: props.code, interval: props.interval, upper: props.upper, lower: props.lower,
-    });
-    return () => {
-      client.dispose();
-      socketRef.current = null;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  useEffect(() => {
-    socketRef.current?.subscribe({
-      code: props.code, interval: props.interval, upper: props.upper, lower: props.lower,
-    });
-  }, [props.code, props.interval, props.upper, props.lower]);
-
-  const loadOverlayIndicator = async (
-    upper: number, code: string, interval: number, params?: number[], preserveScale = false,
-  ) => {
-    const chart = chartRef.current;
-    if (!chart || !mainSeriesRef.current) return;
-    const requestId = ++overlayRequestRef.current;
-    // 清除旧叠加序列
-    overlaySeriesRef.current.forEach((s) => chart.removeSeries(s));
-    overlaySeriesRef.current = [];
-    if (ichimokuPrimRef.current) {
-      mainSeriesRef.current.detachPrimitive(ichimokuPrimRef.current);
-      ichimokuPrimRef.current = null;
-    }
-    if (upper === UPPER_TECH.NONE) return;
-
-    try {
-      // 2026-07-21 17:26:43：仅 Ichimoku 请求未来时间点并启用专用云层，避免影响其他叠加指标。
-      // 2026-08-04：参数接入 — 按指标个数格式化后传给后端 (null 走默认)。
-      const result = await indicatorApi.calculate(
-        'upper', upper, code, interval, formatIndicatorParams('upper', upper, params), upper === UPPER_TECH.IKH,
-      );
-      if (requestId !== overlayRequestRef.current || chartRef.current !== chart || !mainSeriesRef.current) return;
-      for (const s of result.series) {
-        const series = chart.addSeries(LineSeries, {
-          color: s.color,
-          lineWidth: 1,
-          priceScaleId: 'right',
-          lastValueVisible: true,
-        });
-        // 2026-07-30：兜底 — sanitizePoints 丢弃 NaN/undefined/重复 time，避免 setData 抛 Assertion 导致主图加载失败
-        const { points } = sanitizePoints(s.data);
-        series.setData(points.map((d) => ({ time: d.time as Time, value: d.value })));
-        overlaySeriesRef.current.push(series);
-      }
-      if (upper === UPPER_TECH.IKH && result.id === 'IKH') {
-        const primitive = new IchimokuPrimitive(chart, mainSeriesRef.current);
-        primitive.setData(result, barsRef.current, interval <= 2);
-        mainSeriesRef.current.attachPrimitive(primitive);
-        ichimokuPrimRef.current = primitive;
-        // 2026-08-05：刷新路径 preserveScale=true 时跳过 — 不重置时间轴缩放
-        if (!preserveScale) fitTimeScaleDefault();
-      }
-    } catch (e) {
-      console.error('加载叠加指标失败', e);
-      message.error(t('LoadFailed'));
-    }
-  };
-
-  // 2026-08-04：默认放大程度 — 目标蜡烛宽度约 8px, 移动/PC 观感一致:
-  // 移动端竖屏约 50 根/屏, PC 端按容器宽度自适应 (1280px 约 160 根, 比全量 300 根放大近一倍)。
-  const TARGET_BAR_SPACING = 8;
-  const MOBILE_MIN_VISIBLE_BARS = 20;
-  const PC_MIN_VISIBLE_BARS = 60;
-
-  // 统一的时间轴默认范围入口 — 替换所有裸 fitContent 调用点 (主图/副图加载/删除后),
-  // 避免副图加载后的 fitContent 覆盖主图已设置的默认放大范围。
-  const fitTimeScaleDefault = () => {
-    const chart = chartRef.current;
-    if (!chart) return;
-    const ts = chart.timeScale();
-    const minBars = mobileRef.current ? MOBILE_MIN_VISIBLE_BARS : PC_MIN_VISIBLE_BARS;
-    const bars = barsRef.current;
-    const width = containerRef.current?.clientWidth ?? 0;
-    const count = Math.max(minBars, Math.round(width / TARGET_BAR_SPACING));
-    ts.setVisibleLogicalRange({
-      from: Math.max(0, bars.length - count),
-      to: bars.length + 2,
-    });
-  };
-
-  const syncPaneLayout = () => {
-    const chart = chartRef.current;
-    if (!chart) return;
-    // 2026-07-21 18:28:13：手机主图保持双倍权重，桌面继续使用原有等比例 pane 布局。
-    // 2026-08-04：按设备类型判断手机布局 (横屏全屏也按手机布局处理)。
-    // 2026-08-05：主图权重统一 2 (PC 2:1); 全屏隐藏副图由 hideLowerPanesForFullscreen
-    // 移除 pane 实现 (库对 pane 高度有硬性 2px 下限, setStretchFactor(0) 只能压成细缝)。
-    applyPaneLayout(chart);
-  };
-
-  // ---- 加载副图指标 (多选, 每个指标占一个独立 pane) ----
-  // 2026-08-04：拆成 4 个精细路径 + 1 个全量路径。
-  //   - 全量路径：仅在 code/interval 变化时使用（数据源整体换了）
-  //   - addLowerPane / removeLowerPane / resetLowerPane：精细化增/删/重置单副图，其他副图不动
-  //
-  // 给定 result，为指定 paneIndex 创建 series + 写入数据（addLowerPane 与全量路径共用这段循环）。
-  // 2026-07-30：所有 setData 走 sanitizePoints，脏数据(NaN/重复 time/乱序)被丢弃，不再让 setData 抛 Assertion。
-  // 2026-07-30：返回 { seriesList, allEmpty }：所有 series 都空 → 浮层显示 message 而非空白。
-  // 2026-07-30：每个 addSeries/setData 单独 try/catch，单 series 失败不影响后续 series 写入。
-  const buildPaneSeries = (
-    chart: IChartApi,
-    lower: number,
-    paneIndex: number,
-    result: IndicatorResult,
-  ): { seriesList: ISeriesApi<any>[]; allEmpty: boolean } => {
-    const seriesList: ISeriesApi<any>[] = [];
-    const isHistogram = lower === LOWER_TECH.VOLUME || lower === LOWER_TECH.VOLP;
-    let totalPoints = 0;
-    for (let i = 0; i < result.series.length; i++) {
-      const s = result.series[i];
-      const { points } = sanitizePoints(s.data);
-      totalPoints += points.length;
-      try {
-        let series: ISeriesApi<any>;
-        if (lower === LOWER_TECH.MACD && i === 2) {
-          // MACD 柱状图 (第 3 条), 涨跌不同色
-          series = chart.addSeries(HistogramSeries, {}, paneIndex);
-          series.setData(
-            points.map((d) => ({
-              time: d.time as Time,
-              value: d.value,
-              color: d.value >= 0 ? props.palette.overlay.up : props.palette.overlay.down,
-            })),
-          );
-        } else if (isHistogram && i === 0) {
-          // Volume / VolumePlus 柱状图
-          series = chart.addSeries(HistogramSeries, { color: s.color }, paneIndex);
-          series.setData(points.map((d) => ({ time: d.time as Time, value: d.value })));
-        } else {
-          series = chart.addSeries(LineSeries, { color: s.color, lineWidth: 1 }, paneIndex);
-          series.setData(points.map((d) => ({ time: d.time as Time, value: d.value })));
-        }
-        seriesList.push(series);
-      } catch (e) {
-        console.warn(`[ChartPanel] buildPaneSeries 第 ${i} 条 series 失败 (已跳过):`, e);
-      }
-    }
-    try {
-      chart.priceScale('right', paneIndex).applyOptions({ scaleMargins: { top: 0.1, bottom: 0.1 } });
-    } catch (e) {
-      console.warn('[ChartPanel] priceScale applyOptions 失败:', e);
-    }
-    return { seriesList, allEmpty: totalPoints === 0 };
-  };
-
-  /** 全量加载副图（仅在 code/interval 变化时调用，先清空再重建所有副图）。 */
-  const loadLowerIndicators = async (selected: number[], code: string, interval: number) => {
-    const chart = chartRef.current;
-    const paneMap = paneSeriesMapRef.current;
-    if (!chart || !paneMap) return;
-    // 2026-08-04：先**同步**设置 lastLowerRef，[lower] effect 看到 prev === curr 就不会重复 add。
-    // 等价于把"占位"先放好 — 即使后续 addSeries 还没回来，[lower] effect 也不会重复触发。
-    lastLowerRef.current = [...selected];
-    // 2026-08-04：code/interval 变化触发全量重建期间，[lower] effect 必须跳过精细增/删。
-    lowerInitializedRef.current = false;
-    try {
-      // 清除所有旧副图序列 + 重置浮层值缓存
-      // 2026-07-30 重写：全量、索引无关、无残留。
-      // v5 的 removePane 只 splice 布局数组（不删除 pane 内 series），且 index 越界会 assert 抛错。
-      // 因此必须：① 先通过 pane.getSeries() 清掉**所有**副图 series（含 paneMap 未记录的孤儿）；
-      // ② 再固定 removePane(1)（永远删第一个副图）循环删到只剩主图，索引永不越界。
-      const allPanes = chart.panes();
-      for (let pi = 1; pi < allPanes.length; pi++) {
-        // 2026-07-30：removeSeries 在 pane 变空时自动移除 pane，快照里的 pane 可能已失效，
-        // getSeries() 也必须 try/catch，否则中断清空
-        try {
-          for (const s of allPanes[pi].getSeries()) {
-            if (!s) continue;
-            try {
-              chart.removeSeries(s);
-            } catch (_) { /* ignore */ }
-          }
-        } catch (_) { /* ignore */ }
-      }
-      paneMap.clear();
-      lowerResultsRef.current.clear();
-      setLowerValues(new Map());
-      // 2026-07-30：清空"数据异常"标记，等待重新加载
-      if (lowerErrorStates.size > 0) setLowerErrorStates(new Set());
-      // 2026-07-30：removePane(1) 循环 —— 每次删第一个副图，直到只剩主图；
-      // 每个单独 try/catch，一旦失败立即中止（避免死循环），剩余 pane 由数量对账兜底
-      let guard = 0;
-      while (chart.panes().length > 1 && guard++ < 50) {
-        try {
-          chart.removePane(1);
-        } catch (e) {
-          console.warn(`[ChartPanel] 清空副图 pane 失败:`, e);
-          break;
-        }
-      }
-      // 2026-07-31：removePane 已把所有 pane 干掉，"待淡出"骨架没必要继续显示
-      if (pendingFadingOut.size > 0) setPendingFadingOut(new Set());
-      if (selected.length === 0) {
-        setLowerLoadingStates(new Set());
-        syncPaneLayout();
-        // 2026-08-05：不再提前 return —— 让下方对账逻辑兜底"挂载期 lower 已变化但
-        // [lower] effect 因 lowerInitializedRef=false 被跳过"的竞态:
-        // 进入移动端时 App 同步提交默认副图, 而本 effect 闭包捕获的是挂载时的旧 lower,
-        // 变化会被 [lower] effect 吞掉; 走到对账后按 liveSelectionRef 补 addLowerPane。
-      }
-
-      // 2026-07-31：标记 N 个副图为"加载中"，骨架浮层立即淡入（key=tech）
-      setLowerLoadingStates(new Set(selected));
-
-      // 每个副图指标分配一个独立 pane（从 1 开始, 0 是主图）
-      // 2026-07-30：nextPane 只对成功项递增 —— 失败项不占 paneIndex，
-      // 避免后续项跳过失败位导致空 pane / addSeries 越界 / paneMap 与 chart 错位
-      let nextPane = 1;
-      for (let idx = 0; idx < selected.length; idx++) {
-        const lower = selected[idx];
-        const paneIndex = nextPane;
-        try {
-          const result = await indicatorApi.calculate('lower', lower, code, interval, formatIndicatorParams('lower', lower, props.lowerParams));
-          // 2026-08-05：全屏中只缓存不建 series (退出全屏由 restore 统一补建, 不占 paneIndex)
-          lowerResultsRef.current.set(lower, result);
-          if (fullscreenRef.current) continue;
-          const { seriesList, allEmpty } = buildPaneSeries(chart, lower, paneIndex, result);
-          paneMap.set(lower, seriesList);
-          // 2026-07-31：数据就绪 → 从 loading 集合移除，对应骨架淡出
-          setLowerLoadingStates((prev) => {
-            const next = new Set(prev);
-            next.delete(lower);
-            return next;
-          });
-          // 2026-07-30：兜底 — 全部数据被 sanitize 丢弃时，标记该 pane 为 error，浮层显示 message
-          if (allEmpty) {
-            setLowerErrorStates((prev) => new Set(prev).add(lower));
-          }
-          nextPane++;
-          failedLowerRef.current.delete(lower);
-        } catch (e) {
-          console.error(`加载副图指标 ${lower} 失败`, e);
-          // 加载失败同样标记为 error（API 返回了非预期响应）
-          setLowerErrorStates((prev) => new Set(prev).add(lower));
-          // 2026-07-30：失败回滚 — 该指标不占 pane，从 lastLowerRef 移除 + 通知父组件取消勾选，
-          // 否则 props.lower 里的失败占位会让后续删除操作 indexOf 推算错位删错指标
-          failedLowerRef.current.add(lower);
-          lastLowerRef.current = lastLowerRef.current.filter((t) => t !== lower);
-          props.onRemoveLower(lower);
-        }
-      }
-      refreshLowerValues();
-      syncPaneLayout();
-      // 2026-07-30: 副图指标异步加载完成后再 fitContent,
-      // 避免主图被空 pane 挤压造成副图"挤在画布中间"的视觉异常。
-      requestAnimationFrame(fitTimeScaleDefault);
-    } catch (e) {
-      console.error('[ChartPanel] loadLowerIndicators 异常（已恢复标志）:', e);
-    } finally {
-      // 2026-07-30：无论成功/异常，必须恢复标志 —— 否则 [lower] effect 永久跳过，
-      // 所有删除/添加操作全部失效（勾选与 pane 不一致的偶发根因）
-      lowerInitializedRef.current = true;
-    }
-    // 2026-07-30：对账 — 重建 in-flight 期间用户可能增删过副图，
-    // 用 liveSelectionRef.current.lower 与 lastLowerRef 做 diff，补齐差异避免 pane 残留/缺失
-    const liveLower = liveSelectionRef.current.lower;
-    const prevLower = lastLowerRef.current;
-    const liveSet = new Set(liveLower);
-    const prevSet = new Set(prevLower);
-    // 2026-07-30：stillMissing 排除本轮失败项 —— props.onRemoveLower 走 App 16ms pending 通道，
-    // 对账执行时 liveSelectionRef 可能还是旧值（含刚失败的指标），排除后可避免重复请求失败项
-    const stillMissing = liveLower.filter((t) => !prevSet.has(t) && !failedLowerRef.current.has(t));
-    const needRemove = prevLower.filter((t) => !liveSet.has(t));
-    if (needRemove.length > 0) {
-      // 2026-07-30：重建 in-flight 期间发生了删除 → 统一走全量重建（以最新 liveLower 为准），
-      // 不再精细 removeLowerPane，避免删除后浮层/paneTops 状态残留
-      lastLowerRef.current = [...liveLower];
-      void loadLowerIndicators(liveLower, code, interval);
-      return;
-    }
-    if (stillMissing.length > 0) {
-      // 重建期间新增的指标 → 精细补充（不闪烁）
-      lastLowerRef.current = [...liveLower];
-      stillMissing.forEach((tech, i) =>
-        addLowerPane(tech, lastLowerRef.current.length - stillMissing.length + 1 + i, code, interval),
-      );
-    }
-    // 2026-07-30：数量对账 — 重建/对账后 chart 副图 pane 数与 liveLower 数必须一致。
-    // 若仍不一致（历史遗留的幽灵 pane：series 挂在 chart 但 paneMap/lastLowerRef 均无记录），
-    // 从末尾逐个移除多余 pane，保证下拉勾选数与 pane 数严格一致。
-    const extra = chart.panes().length - 1 - liveLower.length;
-    if (extra > 0) {
-      for (let k = 0; k < extra; k++) {
-        const lastIdx = chart.panes().length - 1;
-        if (lastIdx < 1) break;
-        try {
-          // 幽灵 series 不在 paneMap 里，通过 pane.getSeries() 兜底移除
-          const orphans = chart.panes()[lastIdx].getSeries();
-          for (const s of orphans) {
-            try { chart.removeSeries(s); } catch (_) { /* ignore */ }
-          }
-        } catch (_) { /* ignore */ }
-        try {
-          chart.removePane(lastIdx);
-        } catch (e) {
-          console.warn(`[ChartPanel] 对账移除幽灵 pane ${lastIdx} 失败:`, e);
-        }
-      }
-      syncPaneLayout();
-      refreshLowerValues();
-    }
-  };
-
-  /** 精细新增：仅 addSeries + setData 一个新 pane，其他副图完全不动。
-   *  2026-07-30：兜底 — paneIndex 用 chart.panes().length 现场取值，避免外部传入的索引与真实 pane 错位。
-   *  2026-07-30：失败回滚 — 用 chart 当前真实状态清理半创建的 pane/series，并通知父组件回滚 props.lower，
-   *  防止后续 paneIndex 计算再次错位导致连锁失败。
-   */
-  const addLowerPane = async (
-    tech: number,
-    hintPaneIndex: number,
-    code: string,
-    interval: number,
-    // 2026-08-05：触屏切换副图 (关闭→指标) — 跳过主图时间轴缩放重置; 设置面板/全量重建保持原行为。
-    skipZoomReset = false,
-  ) => {
-    const chart = chartRef.current;
-    const paneMap = paneSeriesMapRef.current;
-    if (!chart || !paneMap) return;
-    // 执行时的真实目标 paneIndex = 当前 pane 总数（新建会被追加到末尾）
-    // 仅在 hintPaneIndex 落在合法范围时复用 hint（如 addSeries 显式传 index 场景的兼容性）
-    const panesLenNow = chart.panes().length;
-    const paneIndex = hintPaneIndex >= 1 && hintPaneIndex <= panesLenNow
-      ? hintPaneIndex
-      : panesLenNow;
-    try {
-      const result = await indicatorApi.calculate('lower', tech, code, interval, formatIndicatorParams('lower', tech, props.lowerParams));
-      // 2026-08-05：全屏中只缓存不建 series (副图 pane 已被 hide 移除, 退出全屏由 restore 统一补建)
-      lowerResultsRef.current.set(tech, result);
-      if (fullscreenRef.current) {
-        setLowerLoadingStates((prev) => {
-          const next = new Set(prev);
-          next.delete(tech);
-          return next;
-        });
-        failedLowerRef.current.delete(tech);
-        return;
-      }
-      const { seriesList, allEmpty } = buildPaneSeries(chart, tech, paneIndex, result);
-      paneMap.set(tech, seriesList);
-      setLowerLoadingStates((prev) => {
-        const next = new Set(prev);
-        next.delete(tech);
-        return next;
-      });
-      if (allEmpty) setLowerErrorStates((prev) => new Set(prev).add(tech));
-      failedLowerRef.current.delete(tech);
-      refreshLowerValues();
-      // pane 数量变化, 拉伸权重需重新应用 (触屏切换也保留)
-      syncPaneLayout();
-      // 2026-08-05：触屏切换 (关闭→指标) 不重置主图时间轴缩放
-      if (!skipZoomReset) requestAnimationFrame(fitTimeScaleDefault);
-    } catch (e) {
-      // 抓全 error（含 axios response/cause），方便排查 USD/CAD 等特定品种失败原因
-      console.error(`新增副图指标 ${tech} 失败`, e);
-      // 失败回滚：**仅当本次确实 addSeries 过（buildPaneSeries 半创建）才清理对应 pane。**
-      // 2026-07-30：API 失败（calculate 抛错）时还没 addSeries 任何东西，
-      // 之前无条件 removePane 会误删「最后一个已有 pane」→ props.lower 与图表错位 → 删错指标！
-      const leftovers = paneMap.get(tech);
-      if (leftovers && leftovers.length > 0) {
-        for (const s of leftovers) {
-          if (!s) continue;
-          try { chart.removeSeries(s); } catch (_) { /* ignore */ }
-        }
-        paneMap.delete(tech);
-        lowerResultsRef.current.delete(tech);
-        // 半创建的 pane 才移除（addSeries 成功即创建了 pane）
-        const curLen = chart.panes().length;
-        if (paneIndex >= 1 && paneIndex < curLen) {
-          try { chart.removePane(paneIndex); } catch (_) { /* ignore */ }
-        }
-      }
-      // 把失败 tech 从 lastLowerRef 移除，避免后续 indexOf 推算越界
-      lastLowerRef.current = lastLowerRef.current.filter((t) => t !== tech);
-      // 通知父组件把失败指标从选中数组移除，保证 props.lower 与真实 pane 始终对齐
-      props.onRemoveLower(tech);
-      failedLowerRef.current.add(tech);
-      setLowerLoadingStates((prev) => {
-        const next = new Set(prev);
-        next.delete(tech);
-        return next;
-      });
-      setLowerErrorStates((prev) => new Set(prev).add(tech));
-    }
-  };
-
-  /** 2026-08-04：副图原地替换（移动端点击副图循环切换 / PC 单删单增）——
-   *  复用同一 pane, 切换过程中副图空间固定、无过渡动画。
-   *  先异步加载新指标（旧指标继续显示）→ 数据就绪后同一帧内
-   *  addSeries 新 series（pane 非空, 不会被自动移除）→ removeSeries 旧 series。 */
-  const replaceLowerPane = async (
-    oldTech: number,
-    newTech: number,
-    code: string,
-    interval: number,
-    // 2026-08-05：触屏切换判定由 [lower] effect 统一消费标志后传入 —
-    // 触屏切换不重置主图缩放、不触发主图/叠加指标重绘; 设置面板入口保持原行为。
-    isTapSwitch = false,
-  ) => {
-    const chart = chartRef.current;
-    const paneMap = paneSeriesMapRef.current;
-    if (!chart || !paneMap) return;
-    // 反查旧指标所在 pane（series 引用反查, 与 removeLowerPane 一致）
-    const oldSeriesList = paneMap.get(oldTech) ?? [];
-    const paneIndex = chart.panes().findIndex((p) =>
-      oldSeriesList.some((s) => p.getSeries().includes(s)),
-    );
-    if (paneIndex < 1) {
-      // 旧 pane 找不到（状态异常）→ 走原精细增/删路径兜底
-      removeLowerPane(oldTech);
-      addLowerPane(newTech, 1, code, interval, isTapSwitch);
-      return;
-    }
-    try {
-      const result = await indicatorApi.calculate('lower', newTech, code, interval);
-      // 2026-08-05：全屏中只缓存不建 series (旧 series 已被 hide 移除, 由退出全屏的 restore 重建)
-      if (fullscreenRef.current) {
-        lowerResultsRef.current.set(newTech, result);
-        lowerResultsRef.current.delete(oldTech);
-        paneMap.delete(oldTech);
-        failedLowerRef.current.delete(newTech);
-        return;
-      }
-      // 数据就绪后原地替换: 先 addSeries 新（pane 非空, 不会被自动移除）→ 再 removeSeries 旧
-      const { seriesList, allEmpty } = buildPaneSeries(chart, newTech, paneIndex, result);
-      for (const s of oldSeriesList) {
-        if (!s) continue;
-        try { chart.removeSeries(s); } catch (_) { /* ignore */ }
-      }
-      paneMap.delete(oldTech);
-      paneMap.set(newTech, seriesList);
-      lowerResultsRef.current.delete(oldTech);
-      lowerResultsRef.current.set(newTech, result);
-      if (allEmpty) setLowerErrorStates((prev) => new Set(prev).add(newTech));
-      setLowerErrorStates((prev) => { const n = new Set(prev); n.delete(oldTech); return n; });
-      failedLowerRef.current.delete(newTech);
-      refreshLowerValues();
-      if (isTapSwitch) {
-        // 2026-08-05：触屏切换副图 — 不重置主图时间轴缩放、不重排 pane 布局
-        // (pane 数量不变, 拉伸权重无需重新应用)。WS 重订阅触发的 upper 全量重推
-        // 已由 [lower] effect 同步武装的 suppressUpperRef 抑制, 叠加指标不被拉回起点重绘。
-      } else {
-        // 设置面板入口 — 保持原行为: 同步 pane 布局并重置默认时间轴范围。
-        syncPaneLayout();
-        requestAnimationFrame(fitTimeScaleDefault);
-      }
-      updatePaneTops();
-    } catch (e) {
-      console.error(`替换副图指标 ${oldTech} → ${newTech} 失败`, e);
-      // 失败回滚: 通知父组件取消新指标（旧指标仍显示, 由全量重建兜底收敛状态）
-      props.onRemoveLower(newTech);
-      failedLowerRef.current.add(newTech);
-      setLowerErrorStates((prev) => new Set(prev).add(newTech));
-    }
-  };
-
-  /** 精细删除：仅 removeSeries + removePane 一个 pane，其余副图完全不动。
-   *  2026-07-30 重写（彻底废弃位置推算）：
-   *  - 唯一可靠依据 = series 对象引用反查（chart.panes().findIndex(p => p.getSeries().includes(series))），
-   *    无论 pane 怎么移动/重排，反查到的必是持有该 series 的 pane
-   *  - 反查失败 → 不推算、不硬删，直接触发**全量重建兜底**（以 props.lower 为唯一事实来源），
-   *    任何状态错位/残留都会被重建清掉，绝不会产生错误删除
-   */
-  const removeLowerPane = (tech: number) => {
-    const chart = chartRef.current;
-    const paneMap = paneSeriesMapRef.current;
-    if (!chart || !paneMap) return;
-
-    const seriesList = paneMap.get(tech);
-
-    // 1) series 引用反查真实 pane（对象身份稳定，不受移动/重排影响）
-    let paneIndex = -1;
-    if (seriesList && seriesList.length > 0 && seriesList[0]) {
-      const panes = chart.panes();
-      paneIndex = panes.findIndex((p) => p.getSeries().includes(seriesList[0] as ISeriesApi<any>));
-    }
-
-    // 2) 反查失败（series 已不在 chart / 从未创建成功）→ 清引用 + 全量重建兜底
-    if (paneIndex < 1) {
-      console.warn(`[ChartPanel] 删除 ${tech} 反查 pane 失败，触发全量重建兜底`);
-      paneMap.delete(tech);
-      lowerResultsRef.current.delete(tech);
-      lastLowerRef.current = lastLowerRef.current.filter((t) => t !== tech);
-      void loadLowerIndicators(liveSelectionRef.current.lower, props.code, props.interval);
-      return;
-    }
-
-    // 3) removeSeries —— 目标 pane 内的**全部** series（含 paneMap 未记录的孤儿）。
-    //    ⚠️ v5 行为：removeSeries 在 pane 变空时会**自动移除该 pane**（_cleanupIfPaneIsEmpty）！
-    //    因此 removeSeries 完成后目标 pane 通常已自动消失，**绝不能再按旧 paneIndex 调 removePane**，
-    //    否则会误删"前移上来"的下一个 pane（删 A 却连 B 一起消失的根因）。
-    const targetPane = chart.panes()[paneIndex];
-    if (targetPane) {
-      for (const s of targetPane.getSeries()) {
-        if (!s) continue;
-        try {
-          chart.removeSeries(s);
-        } catch (e) {
-          console.warn(`[ChartPanel] removeSeries 跳过 (可能重复):`, e);
-        }
-      }
-    }
-    paneMap.delete(tech);
-    lowerResultsRef.current.delete(tech);
-
-    // 4) 目标 pane 若未被 removeSeries 自动移除（极端情况：残留无法移除的 series）→
-    //    用 pane 对象引用定位真实位置兜底删除（不依赖旧 index）
-    if (chart.panes().includes(targetPane)) {
-      const realIdx = chart.panes().indexOf(targetPane);
-      try {
-        chart.removePane(realIdx);
-      } catch (e) {
-        console.warn(`[ChartPanel] removePane 失败:`, e);
-      }
-    }
-
-    // 5) 清理 React state（key=tech）
-    lastLowerRef.current = lastLowerRef.current.filter((t) => t !== tech);
-    setLowerValues(() => {
-      const next = new Map<number, string>();
-      lowerResultsRef.current.forEach((result, k) => {
-        next.set(k, formatLastValue(result, props.decimals));
-      });
-      return next;
-    });
-    setLowerErrorStates((prev) => {
-      if (!prev.has(tech)) return prev;
-      const next = new Set(prev);
-      next.delete(tech);
-      return next;
-    });
-    setLowerLoadingStates((prev) => {
-      if (!prev.has(tech)) return prev;
-      const next = new Set(prev);
-      next.delete(tech);
-      return next;
-    });
-    // 6) 删除后立即重算浮层定位 —— pane 重排后 ResizeObserver 异步触发有窗口期，
-    // 主动刷新避免剩余 pane 的浮层位置错乱/丢失
-    updatePaneTops();
-  };
-
-  /** 精细重置：仅对指定 pane 的 series 调用 setData(newData)，其他副图完全不动。 */
-  const resetLowerPane = async (tech: number, code: string, interval: number) => {
-    const chart = chartRef.current;
-    const paneMap = paneSeriesMapRef.current;
-    if (!chart || !paneMap) return;
-    const seriesList = paneMap.get(tech);
-    if (!seriesList || seriesList.length === 0) return;
-
-    // 该 pane 标记为 loading（仅此一个浮层淡入）— key=tech
-    setLowerLoadingStates((prev) => {
-      const next = new Set(prev);
-      next.add(tech);
-      return next;
-    });
-
-    try {
-      const result = await indicatorApi.calculate('lower', tech, code, interval, formatIndicatorParams('lower', tech, props.lowerParams));
-      // 2026-08-05：全屏中只缓存不建 series (series 已被 hide 移除, 由退出全屏的 restore 重建)
-      if (fullscreenRef.current) {
-        lowerResultsRef.current.set(tech, result);
-        return;
-      }
-      const isHistogram = tech === LOWER_TECH.VOLUME || tech === LOWER_TECH.VOLP;
-      seriesList.forEach((series, i) => {
-        const s = result.series[i];
-        if (!s) return;
-        const { points } = sanitizePoints(s.data);
-        if (tech === LOWER_TECH.MACD && i === 2) {
-          series.setData(
-            points.map((d) => ({
-              time: d.time as Time,
-              value: d.value,
-              color: d.value >= 0 ? props.palette.overlay.up : props.palette.overlay.down,
-            })),
-          );
-        } else if (isHistogram && i === 0) {
-          series.setData(points.map((d) => ({ time: d.time as Time, value: d.value })));
-        } else {
-          series.setData(points.map((d) => ({ time: d.time as Time, value: d.value })));
-        }
-      });
-      lowerResultsRef.current.set(tech, result);
-      refreshLowerValues();
-    } catch (e) {
-      console.error(`重置副图指标 ${tech} 失败`, e);
-    } finally {
-      setLowerLoadingStates((prev) => {
-        const next = new Set(prev);
-        next.delete(tech);
-        return next;
-      });
-    }
-  };
-
-  // ---- 2026-08-05：手动刷新 / WS 重连后的全量重拉 (就地更新) ----
-  // 与 [code, interval] 全量重建 effect 的区别：
-  //  - 不重建 series / pane — 主图 setData、副图 resetLowerPane 就地更新, 无闪烁、缩放不跳
-  //  - 不清除绘图对象、不重置绘图工具 (切换品种才会清)
-  //  - 每个 await 后校验 code/interval 仍是当前选择, 防止与切换品种的全量重建交错污染
+  // ===== 2026-08-05：手动刷新 / WS 重连后的全量重拉 (就地更新) =====
   const refreshAllData = async (): Promise<void> => {
     const chart = chartRef.current;
     const series = mainSeriesRef.current;
     if (!chart || !series) return;
-    // 2026-08-06：通知父组件刷新开始 — 驱动工具栏/顶栏刷新按钮转圈 (结束在 finally)
     props.onRefreshingChange?.(true);
     const code = props.code;
     const interval = props.interval;
     const stillCurrent = () =>
-      liveSelectionRef.current.code === code && liveSelectionRef.current.interval === interval;
+      chartRef.current !== null && props.code === code && props.interval === interval;
     try {
       const bars = await marketApi.getBars(code, interval, 300, false);
       if (!stillCurrent()) return;
       barsRef.current = bars;
-      // 主图就地更新 (不重建 series — 保持时间轴缩放与绘图 primitive 引用)
-      series.setData(buildMainSeriesData(bars, props.chartType));
-      if (volumeSeriesRef.current) {
-        volumeSeriesRef.current.setData(buildVolumeData(bars, props.palette));
-      }
-      prosticksPrimRef.current?.setData(bars);
-      // 叠加指标: 主 pane 内重建 series (无 pane 结构变化), IKH 保留时间轴缩放
+      // 重建 series（保证类型切换 / 错误路径下也能重建）
+      renderMainSeries(bars, props.chartType, props.decimals);
+      // 叠加指标: 重建 series
       await loadOverlayIndicator(props.upper, code, interval, props.upperParams, true);
       if (!stillCurrent()) return;
-      // 副图指标: 逐 pane 就地重算 (resetLowerPane 内部 setData + 更新缓存/浮层值)
-      await Promise.all(props.lower.map((tech) => resetLowerPane(tech, code, interval)));
+      // 副图指标: 逐 pane 就地重算 (通过 lowerPaneApi.resetLowerPaneImmediate)
+      const resetPromises = props.lower.map((tech) => resetLowerPaneImmediate(tech));
+      await Promise.all(resetPromises);
     } catch (e) {
       console.error('刷新数据失败', e);
       message.error(t('LoadFailed'));
@@ -1786,123 +439,9 @@ export default function ChartPanel(props: ChartPanelProps) {
       props.onRefreshingChange?.(false);
     }
   };
-  // 镜像最新实例 — 挂载期 WS 重连回调与工具栏/顶栏刷新按钮都经由 ref 调用
   refreshAllRef.current = refreshAllData;
 
-  // ---- 2026-08-05：横屏全屏真正隐藏副图 ----
-  // 库对 pane 高度有硬性下限 (Math.max(计算值, 2)), setStretchFactor(0) 只能压成 2px 细缝,
-  // CSS 也无法归零 — 唯一路径是移除 series → 空 pane 自动删除, 主图占满 100%。
-  // hide 只移除 series/pane, 保留 lowerResultsRef 缓存, 退出全屏从缓存重建, 零网络请求、无闪烁。
-  const hideLowerPanesForFullscreen = () => {
-    const chart = chartRef.current;
-    const paneMap = paneSeriesMapRef.current;
-    if (!chart || !paneMap) return;
-    panesHiddenForFullscreenRef.current = true;
-    // 1) 移除所有副图 series (pane 变空自动移除), 防御式 try/catch 与全量清空一致
-    const allPanes = chart.panes();
-    for (let pi = 1; pi < allPanes.length; pi++) {
-      try {
-        for (const s of allPanes[pi].getSeries()) {
-          if (!s) continue;
-          try {
-            chart.removeSeries(s);
-          } catch (_) { /* ignore */ }
-        }
-      } catch (_) { /* ignore */ }
-    }
-    // 2) 兜底: 未被自动移除的 pane 逐个删除 (固定删 index 1, 永不越界)
-    let guard = 0;
-    while (chart.panes().length > 1 && guard++ < 50) {
-      try {
-        chart.removePane(1);
-      } catch (e) {
-        console.warn(`[ChartPanel] 全屏隐藏副图 pane 失败:`, e);
-        break;
-      }
-    }
-    // 3) 清理引用与浮层状态, 保留 lowerResultsRef 缓存 (恢复时重建用)
-    paneMap.clear();
-    setLowerValues(new Map());
-    setLowerLoadingStates(new Set());
-    setPendingFadingOut(new Set());
-    // 4) 只剩主图自动占满, 同步浮层定位
-    syncPaneLayout();
-    updatePaneTops();
-  };
-
-  /** 退出全屏时从缓存恢复副图 — 按 props.lower 顺序重建 pane:
-   *  命中 lowerResultsRef 缓存 → buildPaneSeries 直接重建 (零网络);
-   *  缓存缺失 (全屏期间异步加载才完成) → addLowerPane 正常请求。 */
-  const restoreLowerPanesFromCache = async () => {
-    const chart = chartRef.current;
-    const paneMap = paneSeriesMapRef.current;
-    if (!chart || !paneMap) return;
-    // hide 未执行过 (首次挂载) → 初始加载由全量路径负责, 不掺和
-    if (!panesHiddenForFullscreenRef.current) return;
-    panesHiddenForFullscreenRef.current = false;
-    // 1) 防御性清空 (防全屏期间漏网的 pane), 与 hide 同一逻辑
-    const allPanes = chart.panes();
-    for (let pi = 1; pi < allPanes.length; pi++) {
-      try {
-        for (const s of allPanes[pi].getSeries()) {
-          if (!s) continue;
-          try {
-            chart.removeSeries(s);
-          } catch (_) { /* ignore */ }
-        }
-      } catch (_) { /* ignore */ }
-    }
-    let guard = 0;
-    while (chart.panes().length > 1 && guard++ < 50) {
-      try {
-        chart.removePane(1);
-      } catch (e) {
-        console.warn(`[ChartPanel] 全屏恢复前清空副图 pane 失败:`, e);
-        break;
-      }
-    }
-    paneMap.clear();
-    // 2) 按 props.lower 顺序逐个重建
-    let nextPane = 1;
-    for (const tech of props.lower) {
-      // 恢复期间又进了全屏 → 放弃, 由下一次 hide/restore 处理
-      if (fullscreenRef.current) return;
-      const cached = lowerResultsRef.current.get(tech);
-      if (cached) {
-        // 复用与 addLowerPane 相同的 paneIndex 兜底逻辑 (失败项不占位)
-        const panesLenNow = chart.panes().length;
-        const paneIndex = nextPane >= 1 && nextPane <= panesLenNow ? nextPane : panesLenNow;
-        try {
-          const { seriesList } = buildPaneSeries(chart, tech, paneIndex, cached);
-          paneMap.set(tech, seriesList);
-          setLowerErrorStates((prev) => {
-            if (!prev.has(tech)) return prev;
-            const next = new Set(prev);
-            next.delete(tech);
-            return next;
-          });
-          setLowerLoadingStates((prev) => {
-            if (!prev.has(tech)) return prev;
-            const next = new Set(prev);
-            next.delete(tech);
-            return next;
-          });
-          nextPane++;
-        } catch (e) {
-          console.warn(`[ChartPanel] 全屏恢复副图 ${tech} 失败:`, e);
-        }
-      } else {
-        // 缓存缺失 → 走正常加载 (内部已有全屏守卫)
-        await addLowerPane(tech, nextPane, props.code, props.interval);
-        nextPane++;
-      }
-    }
-    refreshLowerValues();
-    syncPaneLayout();
-    updatePaneTops();
-  };
-
-  // ---- 十字光标读数 ----
+  // ===== 十字光标读数 =====
   const updateInfoOverlay = (param: MouseEventParams<Time>) => {
     if (!param.time || !param.seriesData) {
       setInfo('');
@@ -1927,18 +466,14 @@ export default function ChartPanel(props: ChartPanelProps) {
       mpStr,
     );
 
-    // 同时更新绘图预览 (用鼠标实际价格, 而非 bar 收盘价)
     const mousePrice = getMousePrice(param);
-    if (mousePrice !== null && drawingMgrRef.current) {
+    if (mousePrice !== null && drawingMgrRef.current && props.mobile !== true) {
       drawingMgrRef.current.handleMouseMove(param.time, mousePrice);
     }
   };
-  // 2026-08-05：每次渲染镜像最新函数 — 挂载期订阅经由 ref 调用, 确保读到最新 props
   updateInfoOverlayRef.current = updateInfoOverlay;
 
-  // 2026-08-05：3 秒自动隐藏定时器 — 触屏松开/离开后自动隐藏库原生光标线 + info 浮层
-  // 调库 chart.clearCrosshairPosition() 同时隐藏 vertLine/horzLine, 库内部会派发
-  // subscribeCrosshairMove 回调 → updateInfoOverlay 设 setInfo('') 清空浮层
+  // 2026-08-05：3 秒自动隐藏定时器
   const cancelHide = () => {
     if (hideTimerRef.current !== null) {
       window.clearTimeout(hideTimerRef.current);
@@ -1953,7 +488,6 @@ export default function ChartPanel(props: ChartPanelProps) {
       hideTimerRef.current = null;
     }, 1300);
   };
-  // 卸载清理
   useEffect(() => () => {
     cancelHide();
     if (crosshairRafRef.current !== null) {
@@ -1962,18 +496,16 @@ export default function ChartPanel(props: ChartPanelProps) {
     }
   }, []);
 
-  /** 从鼠标事件参数中提取实际价格 (基于鼠标 Y 坐标, 而非 bar 收盘价)。 */
+  /** 从鼠标事件参数中提取实际价格 */
   const getMousePrice = (param: MouseEventParams<Time>): number | null => {
     if (!param.point || !mainSeriesRef.current) return null;
     let y = param.point.y;
     const paneIdx = param.paneIndex;
-    // Sub-pane point.y is pane-local; remap it to the main pane Y space.
-    if (paneIdx !== undefined && paneIdx !== 0 && paneRects[paneIdx]) {
-      const mainTop = paneRects[0]?.top ?? 0;
-      y = (param.point.y + paneRects[paneIdx].top - mainTop) as Coordinate;
+    if (paneIdx !== undefined && paneIdx !== 0 && paneLayouts[paneIdx]) {
+      const mainTop = paneLayouts[0]?.top ?? 0;
+      y = (param.point.y + paneLayouts[paneIdx].top - mainTop) as Coordinate;
     }
-    // 预览端点限制在主图可视范围内，避免副图预览线超出主图边界。
-    const mainRect = paneRects[0];
+    const mainRect = paneLayouts[0];
     if (mainRect && mainRect.height > 0) {
       y = Math.min(Math.max(y, 0), mainRect.height - 1) as Coordinate;
     }
@@ -1981,16 +513,11 @@ export default function ChartPanel(props: ChartPanelProps) {
     return price;
   };
 
-  // ---- 点击/触摸落点 → 绘图工具 ----
-  // 2026-08-27：从 handleChartClick 抽出统一落点入口, 供 PC 的库 click 与触屏 pointer
-  // 事件共用, 避免触屏拖动时库 click 不触发导致无法落点。
+  // ===== 点击/触摸落点 → 绘图工具 =====
   const consumeToolTap = (time: Time, price: number) => {
     const mgr = drawingMgrRef.current;
     if (!mgr) return;
     if (mgr.getActiveTool() === TOOL.TEXTBOX) {
-      // 2026-07-27：直接创建一个空文字框并进入编辑态, 不再弹 prompt
-      // 2026-07-31：创建后退出文字框工具, 每次新增需重新选择 工具→文本框
-      // 2026-07-31：addTextBox 返回 -1 表示 TEXTBOX 已达上限 (5)
       const idx = mgr.addTextBox(time, price, '');
       if (idx < 0) {
         message.warning(t('LimitReached'));
@@ -2003,7 +530,6 @@ export default function ChartPanel(props: ChartPanelProps) {
       mgr.setTool(TOOL.NONE);
       props.onToolChange(TOOL.NONE);
     } else {
-      // 2026-07-31：handleClick 返回 'limit' 表示该类已达上限 — 提示并切回 NONE
       const r = mgr.handleClick(time, price);
       if (r === 'limit') {
         message.warning(t('LimitReached'));
@@ -2013,36 +539,28 @@ export default function ChartPanel(props: ChartPanelProps) {
     }
   };
 
-  // PC 鼠标路径: 库 click → 绘图工具。移动端触屏绘图完全由 pointer 事件驱动
-  // (库的 click 在拖动时不触发, 且会与 pointerdown/up 双落点), 直接跳过。
   const handleChartClick = (param: MouseEventParams<Time>) => {
     if (props.mobile === true) return;
-    // 2026-07-31：副图点击不消费 — 绘图工具只工作在主图 (paneIndex === 0)。
-    // 旧代码没读 param.paneIndex，副图点击会通过 mainSeriesRef.current.coordinateToPrice
-    // 把副图 Y 坐标错误映射到主图价格轴，导致在主图上画出"鬼线"。
-    // TradingView 规范：绘图工具绑定主图，副图事件应直接 return。
     if(param.paneIndex == undefined || param.paneIndex !== 0) return;
     if (!param.time || !mainSeriesRef.current) return;
     const mousePrice = getMousePrice(param);
     if (mousePrice === null) return;
     consumeToolTap(param.time, mousePrice);
   };
-  // 2026-08-05：每次渲染镜像最新函数 — 挂载期订阅经由 ref 调用, 确保读到最新 t
   handleChartClickRef.current = handleChartClick;
 
-  // ---- 工具提示 ----
+  // ===== 工具提示 =====
   const updateToolHint = (tool: number) => {
-    // 移动端无右键, 取消通过浮层上的"取消"按钮完成; PC 端保留右键取消提示。
     const cancelHint = props.mobile ? '' : ` · ${t('RightClickCancel')}`;
     if (tool === TOOL.TRENDLINE) setToolHint(`${t('DrawLine')}: ${t('chart')} → 2 ${'points'}${cancelHint}`);
     else if (tool === TOOL.PARALLEL_LINE) setToolHint(`${t('ParallelLines')}: 3 ${'points'}${cancelHint}`);
-    else if (tool === TOOL.PARALLEL_CHANNEL) setToolHint(`${t('ParallelChannel')}: 3 ${'points'}${cancelHint}`);
+    else if (tool === TOOL.PARALLEL_CHANNEL) setToolHint(`${t('ParallelChannel')}: 3 ${'points'} (左下 → 左上 → 右上)${cancelHint}`);
     else if (tool === TOOL.FIBON_RET) setToolHint(`${t('FibRetracement')}: 2 ${'points'}${cancelHint}`);
     else if (tool === TOOL.FIBON_PRO) setToolHint(`${t('FibProjection')}: 3 ${'points'}${cancelHint}`);
     else setToolHint('');
   };
 
-  // 暴露缩放/平移给 App
+  // ===== 缩放/平移 (暴露给 App) =====
   const zoomOut = useCallback(() => {
     const ts = chartRef.current?.timeScale();
     if (!ts) return;
@@ -2068,41 +586,14 @@ export default function ChartPanel(props: ChartPanelProps) {
     if (range) ts.setVisibleLogicalRange({ from: range.from + 30, to: range.to + 30 });
   }, []);
 
-  // 2026-07-29：副图标题浮层按钮 handler
-  // 2026-07-30 重写：pane.moveTo 已即时完成重排，series 不重建；只需同步 React state。
-  // 2026-07-30 重构：paneMap/lowerResultsRef 的 key 是 tech（与位置无关），移动时**无需 swap**；
-  // 但 lastLowerRef 是顺序基准，必须与 moveTo 同一时刻同步交换——否则 App 16ms pending
-  // 未 flush 期间触发删除，会拿旧顺序推算 paneIndex 删错指标。
+  // ===== 副图移动（moveTo 即时重排 + 通知 App）=====
   const handleMoveLower = useCallback((tech: number, dir: -1 | 1) => {
-    const chart = chartRef.current;
-    if (!chart) return;
-    const panes = chart.panes();
-    const lowerList = props.lower;
-    const arrIdx = lowerList.indexOf(tech);
-    if (arrIdx < 0) return;
-    const oldPaneIdx = arrIdx + 1;
-    const newPaneIdx = oldPaneIdx + dir;
-    if (newPaneIdx < 1 || newPaneIdx >= panes.length) return;
-
-    // 1) 即时 pane 重排 (lightweight-charts 内部完成视觉切换)
-    panes[oldPaneIdx].moveTo(newPaneIdx);
-
-    // 2) 同步 lastLowerRef（与 moveTo 同一时刻，相邻交换，dir ∈ {-1, 1}）
-    const lr = [...lastLowerRef.current];
-    if (lr.length > 0) {
-      [lr[oldPaneIdx - 1], lr[newPaneIdx - 1]] = [lr[newPaneIdx - 1], lr[oldPaneIdx - 1]];
-      lastLowerRef.current = lr;
-    }
-
-    // 3) 同步 React state (让浮层按钮顺序跟着变，但不触发 reload)
+    moveLowerFromHook(tech, dir);
     props.onReorderLower(tech, dir);
-  }, [props.lower, props.onReorderLower]);
+  }, [moveLowerFromHook, props.onReorderLower]);
 
-  // 2026-08-04：删除走精细路径 — 仅 removeSeries + removePane 该 pane，其他副图保持原样。
-  // 之前是调 props.onRemoveLower → props.lower 变化 → useEffect → loadLowerIndicators → 全清全建 → 闪烁
-  // 现在 useEffect 检测到数组变化后会调用 removeLowerPane(tech)，无需手动干预。
-  // 2026-07-30：防连点 — 双击/快速连点时第二次点击会落在"前移上来"的下一个 pane 的删除按钮上，
-  // 导致一次误删多个 pane。加 300ms 时间锁，同一时刻只接受一次删除请求。
+  // ===== 副图删除/重置 =====
+  const lastRemoveAtRef = useRef(0);
   const handleRemoveLower = useCallback((tech: number) => {
     const now = Date.now();
     if (now - lastRemoveAtRef.current < 300) return;
@@ -2110,25 +601,61 @@ export default function ChartPanel(props: ChartPanelProps) {
     props.onRemoveLower(tech);
   }, [props.onRemoveLower]);
 
-  // 2026-08-04：重置走精细路径 — 仅 setData(newData) 该 pane 的所有 series，其他副图保持原样。
-  // 之前是直接 loadLowerIndicators() → 全清全建 → 所有副图一起闪烁。
   const handleResetLower = useCallback((tech: number) => {
-    void resetLowerPane(tech, props.code, props.interval);
-  }, [props.code, props.interval]);
+    resetLowerPaneImmediate(tech);
+  }, [resetLowerPaneImmediate]);
 
-  // 通过 ref 暴露
+  // 2026-09-09：以下 5 个 callback 从 JSX 内联函数收敛而来，避免子组件 React.memo 失效
+  // 或触发不必要的 chart-container onClick 闭包重建。
+  const handlePaneMoveUp = useCallback((tech: number) => handleMoveLower(tech, -1), [handleMoveLower]);
+
+  const handleTextBoxSelect = useCallback((idx: number | null) => {
+    setSelectedTextBox(idx);
+  }, []);
+
+  const handleTextBoxRequestEdit = useCallback((idx: number) => {
+    // 2026-09-01：移动端非画线模式下禁止进入编辑（避免与触屏手势冲突）
+    if (props.mobile && props.mobileDrawMode !== true) return;
+    setSelectedTextBox(idx);
+    setEditingTextBox(idx);
+  }, [props.mobile, props.mobileDrawMode]);
+
+  const handleTextBoxCommit = useCallback((idx: number, text: string) => {
+    const mgr = drawingMgrRef.current;
+    if (!mgr) return;
+    if (text === '') {
+      mgr.deleteTextBox(idx);
+      setSelectedTextBox(null);
+    } else {
+      mgr.updateTextBox(idx, text);
+    }
+    setEditingTextBox(null);
+  }, []);
+
+  const handleTextBoxMove = useCallback((idx: number, time: Time, price: number) => {
+    // 2026-09-01：移动端非画线模式下禁止拖动（避免与触屏手势冲突）
+    if (props.mobile && props.mobileDrawMode !== true) return;
+    drawingMgrRef.current?.moveTextBox(idx, time, price);
+  }, [props.mobile, props.mobileDrawMode]);
+
+  const handleContainerClick = useCallback(() => {
+    // 点击空白处取消选中文字框（编辑中除外）
+    if (selectedTextBox !== null && editingTextBox === null) {
+      setSelectedTextBox(null);
+    }
+  }, [selectedTextBox, editingTextBox]);
+
+  // ===== 通过 ref 暴露缩放/平移给 App =====
   useEffect(() => {
     (window as any).__chartZoom = { zoomOut, zoomIn, shiftLeft, shiftRight };
-    // 2026-07-31：HMR 修复 — 加 cleanup，避免旧 chart 的 zoom callback 残留在 window 上
     return () => { delete (window as any).__chartZoom; };
   }, [zoomOut, zoomIn, shiftLeft, shiftRight]);
 
-  // 2026-07-27：全局键盘监听 — 选中态下按 Delete/Backspace 删除当前文字框
+  // ===== 全局键盘监听 — Delete 键删除选中文字框 =====
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (selectedTextBox === null) return;
-      if (editingTextBox !== null) return; // 编辑态不拦截
-      // 用户正在输入框里打字时也不要拦截
+      if (editingTextBox !== null) return;
       const ae = document.activeElement as HTMLElement | null;
       if (ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA' || ae.isContentEditable)) return;
       if (e.key === 'Delete' || e.key === 'Backspace') {
@@ -2141,19 +668,14 @@ export default function ChartPanel(props: ChartPanelProps) {
     return () => window.removeEventListener('keydown', onKey);
   }, [selectedTextBox, editingTextBox]);
 
-  // 2026-07-24：注入涨跌 CSS 变量, .info-overlay 的 .up / .down 类直接消费
-  // 2026-08-04：移除 --mobile-lower-height (原用于按副图数增加容器高度),
-  // 移动端图表高度改为撑满容器剩余空间, 不再产生纵向滚动。
-  const chartStyle = {
+  // ===== 涨跌 CSS 变量注入 =====
+  // 2026-09-09：useMemo 避免每次 render 创建新对象触发 inline style diff
+  const chartStyle = useMemo<CSSProperties>(() => ({
     '--io-up': props.palette.overlay.up,
     '--io-down': props.palette.overlay.down,
-  } as CSSProperties;
+  } as CSSProperties), [props.palette.overlay.up, props.palette.overlay.down]);
 
-  // ---- 2026-08-03：触摸绘图输入路径 (REQ-MOBILE-003) ----
-  // 轻量图表 v5 的十字光标在触摸拖动时不更新 (拖动被当作平移消费), 所以拖动预览
-  // 必须由这里自己转换 client 坐标 → time/price 驱动 DrawingManager。
-  // 鼠标路径不走这里 (e.pointerType === 'mouse' 直接忽略), 桌面行为零变化。
-  // 坐标转换复用 TextBoxLayer 的 getBoundingClientRect 模式 (TextBoxLayer.tsx:189-196)。
+  // ===== 触屏 client 坐标 → (time, price) =====
   const clientToTimePrice = (clientX: number, clientY: number): { time: Time; price: number } | null => {
     const chart = chartRef.current;
     const series = mainSeriesRef.current;
@@ -2162,9 +684,7 @@ export default function ChartPanel(props: ChartPanelProps) {
     const rect = el.getBoundingClientRect();
     const localX = clientX - rect.left;
     const localY = clientY - rect.top;
-    // 2026-08-27：触屏绘制仅映射主图 pane (与 PC click 的 paneIndex===0 语义一致),
-    // 主图区域外的触摸不产生有效落点, 避免误画到副图。
-    const mainRect = paneRects[0];
+    const mainRect = paneLayouts[0];
     if (mainRect && mainRect.height > 0 &&
         (localY < mainRect.top || localY > mainRect.top + mainRect.height)) {
       return null;
@@ -2175,9 +695,15 @@ export default function ChartPanel(props: ChartPanelProps) {
     return { time, price };
   };
 
-  // 2026-08-06：长按十字线渲染统一入口 — 从 lastTouchPointRef 取最近一次手指位置,
-  // 主 pane 判定后调库 setCrosshairPosition 显示原生 vertLine/horzLine,
-  // 自动触发 subscribeCrosshairMove 回调 → info 浮层。供 rAF 回调与长按激活共用。
+  // ===== 长按十字线渲染 =====
+  const lowerTapStartRef = useRef<{ x: number; y: number; pointerId: number } | null>(null);
+  const longPressTimerRef = useRef<number | null>(null);
+  const longPressActiveRef = useRef(false);
+  // 2026-09-08: lastTouchPointRef 抽到 useCanvasCrosshair 后由 hook 内部维护, 此处保留 ChartPanel
+  // 自己的本地引用用于 onChartPointerMove 的拖动距离判断 (与 hook 内部状态机并行)。
+  // 简化: 实际只有 longPressActiveRef.current 决定十字光标是否显示, lastTouchPointRef
+  // 由 hook 内部 rAF 回调消费, 此处不再需要。
+
   const renderCrosshairFromLastPoint = () => {
     crosshairRafRef.current = null;
     if (!longPressActiveRef.current) return;
@@ -2189,8 +715,7 @@ export default function ChartPanel(props: ChartPanelProps) {
     const rect = el.getBoundingClientRect();
     const localY = pt.clientY - rect.top;
     const tp = clientToTimePrice(pt.clientX, pt.clientY);
-    const mainRect = paneRects[0];
-    // 仅在主图 pane 范围内显示 (paneIndex === 0)
+    const mainRect = paneLayouts[0];
     const inMainPane = mainRect && localY >= mainRect.top && localY <= mainRect.top + mainRect.height;
     if (tp && inMainPane) {
       chart.setCrosshairPosition(tp.price, tp.time, series);
@@ -2200,7 +725,6 @@ export default function ChartPanel(props: ChartPanelProps) {
     }
   };
 
-  // 2026-08-06：rAF 帧节流 — 同帧内多次 pointermove 只合并执行一次渲染
   const scheduleCrosshairUpdate = () => {
     if (crosshairRafRef.current !== null) return;
     crosshairRafRef.current = window.requestAnimationFrame(renderCrosshairFromLastPoint);
@@ -2213,23 +737,26 @@ export default function ChartPanel(props: ChartPanelProps) {
     }
   };
 
-  // 2026-08-05：触屏路径统一处理 — 鼠标路径仍走库的 subscribeCrosshairMove (这里直接 return, 桌面零变化)
-  // 2026-08-06：修正判定时机 — 8px 位移取消长按只在未激活时生效;
-  // 激活后手指移动只驱动十字线 (经 rAF 帧节流), 不再取消。
+  const cancelLongPress = () => {
+    if (longPressTimerRef.current !== null) {
+      window.clearTimeout(longPressTimerRef.current);
+      longPressTimerRef.current = null;
+    }
+  };
+
   const onChartPointerMove = (e: ReactPointerEvent<HTMLDivElement>) => {
     if (e.pointerType === 'mouse') return;
+    if (drawInteraction.handleDrawPointerMove(e)) return;
     const chart = chartRef.current;
     const series = mainSeriesRef.current;
     if (!chart || !series) return;
     const start = lowerTapStartRef.current;
     const isOwnPointer = !!start && start.pointerId === e.pointerId;
-    // 未激活 (600ms 等待期内): 位移超阈值视为取消长按; 激活后不再取消, 十字线持续跟随手指
     if (!longPressActiveRef.current && isOwnPointer &&
         Math.hypot(e.clientX - start.x, e.clientY - start.y) > LOWER_TAP_THRESHOLD) {
       cancelLongPress();
       lastTouchPointRef.current = null;
     }
-    // 记录本手指最新位置: 未激活时供长按激活瞬间取用, 激活后作为下一帧十字线目标
     if (isOwnPointer) {
       lastTouchPointRef.current = { clientX: e.clientX, clientY: e.clientY };
     }
@@ -2244,8 +771,8 @@ export default function ChartPanel(props: ChartPanelProps) {
     scheduleCrosshairUpdate();
   };
 
-  // 2026-08-05：手指离开 chart → 1.3 秒后自动隐藏库光标线 + info
   const onChartPointerLeave = () => {
+    drawInteraction.cancelAnchorDrag();
     cancelLongPress();
     longPressActiveRef.current = false;
     lastTouchPointRef.current = null;
@@ -2253,8 +780,8 @@ export default function ChartPanel(props: ChartPanelProps) {
     scheduleHide();
   };
 
-  // 2026-08-05：触屏事件被系统打断 (电话/弹窗) → 立即隐藏, 不留尾
   const onChartPointerCancel = () => {
+    drawInteraction.cancelAnchorDrag();
     lowerTapStartRef.current = null;
     cancelLongPress();
     longPressActiveRef.current = false;
@@ -2265,33 +792,15 @@ export default function ChartPanel(props: ChartPanelProps) {
     cancelHide();
   };
 
-  // ---- 2026-08-04：点击副图循环切换指标 (需求: 正常状态下点副图按顺序切换) ----
-  // 记录 pointer 起点, pointerup 时区分"轻点 / 拖动"；命中副图 pane 区域且无绘图工具激活时,
-  // stopPropagation 阻止 MobileLayout 的"轻点进入全屏", 并触发 onCycleLower。
-  const lowerTapStartRef = useRef<{ x: number; y: number; pointerId: number } | null>(null);
-  const longPressTimerRef = useRef<number | null>(null);
-  const longPressActiveRef = useRef(false);
-  const LONG_PRESS_MS = 600;
-  const LOWER_TAP_THRESHOLD = 8;
-
-  const cancelLongPress = () => {
-    if (longPressTimerRef.current !== null) {
-      window.clearTimeout(longPressTimerRef.current);
-      longPressTimerRef.current = null;
-    }
-  };
-
   const onChartPointerDown = (e: ReactPointerEvent<HTMLDivElement>) => {
     lowerTapStartRef.current = { x: e.clientX, y: e.clientY, pointerId: e.pointerId };
     lastTouchPointRef.current = null;
     longPressActiveRef.current = false;
     cancelLongPress();
 
-    // 鼠标仍完全沿用 lightweight-charts 原生路径；绘图工具需要立即接收触摸位置。
-    if (e.pointerType === 'mouse' || props.tool !== TOOL.NONE) {
+    const drawModeTapOnly = props.mobileDrawMode === true;
+    if (e.pointerType === 'mouse' || (props.tool !== TOOL.NONE && !drawModeTapOnly)) {
       onChartPointerMove(e);
-      // 2026-08-27：触屏绘图 — 库的 click 在拖动时不触发, 因此以 pointerdown 落点
-      // (两点工具起点 / 三点工具各点), pointerup 再补两点工具的终点。
       if (e.pointerType !== 'mouse' && props.tool !== TOOL.NONE) {
         const tp = clientToTimePrice(e.clientX, e.clientY);
         if (tp) consumeToolTap(tp.time, tp.price);
@@ -2300,20 +809,25 @@ export default function ChartPanel(props: ChartPanelProps) {
     }
 
     const containerRect = containerRef.current?.getBoundingClientRect();
-    const mainRect = paneRects[0];
+    const mainRect = paneLayouts[0];
     if (!containerRect || !mainRect) return;
     const localY = e.clientY - containerRect.top;
     const inMainPane = localY >= mainRect.top && localY <= mainRect.top + mainRect.height;
     if (!inMainPane) return;
 
-    // 短按保留给 MobileLayout 进入全屏；持续按住 0.6 秒后才显示十字线。
+    if (drawInteraction.handleDrawPointerDown(e)) {
+      cancelLongPress();
+      return;
+    }
+
     const { clientX, clientY, pointerId } = e;
     longPressTimerRef.current = window.setTimeout(() => {
       const start = lowerTapStartRef.current;
       longPressTimerRef.current = null;
       if (!start || start.pointerId !== pointerId) return;
+      if (props.mobileDrawMode === true) return;
+      if (drawingMgrRef.current && drawingMgrRef.current.getActiveTool() !== TOOL.NONE) return;
       longPressActiveRef.current = true;
-      // 用 600ms 内最新手指位置而非按下瞬间坐标, 消除轻微位移造成的十字线偏移
       const latest = lastTouchPointRef.current;
       lastTouchPointRef.current = { clientX: latest?.clientX ?? clientX, clientY: latest?.clientY ?? clientY };
       cancelHide();
@@ -2330,22 +844,15 @@ export default function ChartPanel(props: ChartPanelProps) {
     const start = lowerTapStartRef.current;
     lowerTapStartRef.current = null;
     if (!start || start.pointerId !== e.pointerId) return;
-    // 长按只用于十字线，阻止本次松手冒泡成 MobileLayout 的轻点全屏。
     if (wasLongPress) {
       e.stopPropagation();
       return;
     }
-    // 2026-09-01：移动端画线模式 (抽屉打开) — 优先走 hook 的纯 tap 定点/选中闭环，
-    // 避免与下方"绘图工具拖动补点"逻辑并存 (那套是早期触屏绘制的过渡实现，
-    // 在移动端画线模式下与"tap=单次定点"语义冲突)。
     if (drawInteraction.handleDrawPointerUp(e, start)) return;
-    // 2026-08-27：绘图工具激活 — 触屏绘制不依赖库 click (拖动不触发), 由 pointer 闭环。
     if (props.tool !== TOOL.NONE) {
-      if (e.pointerType !== 'mouse') {
+      if (e.pointerType !== 'mouse' && props.mobileDrawMode !== true) {
         const activeTool = drawingMgrRef.current?.getActiveTool();
         const dragged = Math.hypot(e.clientX - start.x, e.clientY - start.y) > LOWER_TAP_THRESHOLD;
-        // 两点工具 (趋势线/斐波那契回调): "按下-拖动-松开"一气呵成, 松开作为第二点;
-        // 三点工具每个点已在 pointerdown 落点, 此处不再追加, 避免对象创建后多落一点。
         if (dragged && (activeTool === TOOL.TRENDLINE || activeTool === TOOL.FIBON_RET)) {
           const tp = clientToTimePrice(e.clientX, e.clientY);
           if (tp) consumeToolTap(tp.time, tp.price);
@@ -2353,40 +860,34 @@ export default function ChartPanel(props: ChartPanelProps) {
       }
       return;
     }
-    // 位移超阈值 = 拖动/平移, 不切换
     if (Math.hypot(e.clientX - start.x, e.clientY - start.y) > LOWER_TAP_THRESHOLD) return;
-    // 2026-08-05：全屏时副图 pane 已被隐藏 (无副图可点), 点击应走"单击退出全屏"
     if (fullscreenRef.current) return;
     if (!props.onCycleLower) return;
     const containerRect = containerRef.current?.getBoundingClientRect();
     if (!containerRect) return;
     const y = e.clientY - containerRect.top;
-    // 2026-08-04：点击副图描述条（指标名称条）→ 打开副图指标选择列表（不进全屏、不循环切换）
     const titleEl = (e.target as HTMLElement).closest('.pane-title-mobile');
     if (titleEl) {
       e.stopPropagation();
       window.dispatchEvent(new CustomEvent('chart:open-lower-select'));
       return;
     }
-    // 命中副图 pane 区域 (index >= 1)；无副图（关闭态）时主图底部 48px 作为"副图热区",
-    // 让循环切换可从关闭态点回 VOLUME。
-    const mainRect = paneRects[0];
+    const mainRect = paneLayouts[0];
     const hitLower =
-      paneRects.some((r, i) => i >= 1 && y >= r.top && y <= r.top + r.height) ||
-      (paneRects.length === 1 && !!mainRect && y >= mainRect.top + mainRect.height - 48);
+      paneLayouts.some((r, i) => i >= 1 && y >= r.top && y <= r.top + r.height) ||
+      (paneLayouts.length === 1 && !!mainRect && y >= mainRect.top + mainRect.height - 48);
     if (!hitLower) return;
-    e.stopPropagation(); // 阻止 MobileLayout 轻点进入全屏
+    e.stopPropagation();
     props.onCycleLower();
   };
 
-  // 2026-08-05：onPointerUp 末尾追加 — 触屏松开后启动 3 秒自动隐藏
-  // (PC 鼠标不触发此定时器, 库原生光标线鼠标移出 chart 自动消失)
   const onChartPointerUpWithHide = (e: ReactPointerEvent<HTMLDivElement>) => {
     onChartPointerUp(e);
     if (e.pointerType !== 'mouse') {
       scheduleHide();
     }
   };
+
 
   return (
     <div
@@ -2399,111 +900,38 @@ export default function ChartPanel(props: ChartPanelProps) {
       onPointerLeave={onChartPointerLeave}
       onPointerCancel={onChartPointerCancel}
       aria-label="Forex chart"
-      onClick={() => {
-        // 2026-07-27：图表空白处点击 → 取消选中文字框
-        if (selectedTextBox !== null && editingTextBox === null) {
-          setSelectedTextBox(null);
-        }
-      }}
+      onClick={handleContainerClick}
     >
-      {info && <div className="info-overlay" dangerouslySetInnerHTML={{ __html: info}} />}
-      {/* 触屏路径：库原生 vertLine/horzLine + info 浮层 (scheduleHide 3 秒后调 clearCrosshairPosition 隐藏) */}
-      <div className={`tools-hint ${toolHint ? 'show' : ''}`}>
-        {toolHint}
-        {/* 2026-08-27：移动端无右键, 提供触摸友好的"取消"按钮 (PC 端仍走右键, 保持零变化) */}
-        {toolHint && props.mobile === true && (
-          <button
-            type="button"
-            className="tools-hint-cancel"
-            onPointerDown={(e) => e.stopPropagation()}
-            onClick={(e) => {
-              e.stopPropagation();
-              window.dispatchEvent(new CustomEvent('chart:cancel-drawing'));
-            }}
-            aria-label={t('CancelDraw')}
-          >
-            {t('CancelDraw')}
-          </button>
-        )}
-      </div>
-      {/* 2026-07-29：副图标题浮层 — 移动端由 CSS @media 隐藏 */}
-      {props.lower.map((tech, idx) => {
-        const paneIdx = idx + 1;
-        const nameKey = LOWER_NAME_KEY[tech] ?? 'Lower';
-        const measuredTop = paneTops[paneIdx];
-        // 2026-07-31：浮层位置未就绪时不渲染，避免新增副图瞬间在 chart-container 顶部 4px 闪现
-        if (measuredTop === undefined) return null;
-        // 2026-08-04：移动端描述条贴紧副图 pane 顶部 (主/副图交界处), 桌面端保留 4px 内边距
-        const isMobileLayout = props.mobile === true;
-        const top = isMobileLayout ? measuredTop : measuredTop + 4;
-        // 2026-07-30：error/值 state 的 key 是 tech（与位置无关）
-        const isError = lowerErrorStates.has(tech);
-        return (
-          <div
-            key={`pane-title-${tech}`}
-            className={`pane-title-overlay${isError ? ' pane-title-error' : ''}${isMobileLayout ? ' pane-title-mobile' : ''}`}
-            style={{ top }}
-            onMouseDown={(e) => e.stopPropagation()}
-          >
-            <span className="pane-title-name">{t(nameKey as any)}</span>
-            <span className="pane-title-value" style={isError ? { color: '#c0392b', fontStyle: 'italic' } : undefined}>
-              {isError ? '数据异常，已隐藏' : (isMobileLayout
-                ? formatLowerValueForMobile(tech, lowerResultsRef.current.get(tech), props.decimals)
-                : (lowerValues.get(tech) ?? '—'))}
-            </span>
-            {!isMobileLayout && (
-            <span className="pane-title-actions">
-              <Button
-                icon={<CaretUpOutlined />}
-                type="default"
-                title={t('MoveUp')}
-                aria-label={t('MoveUp')}
-                disabled={idx === 0}
-                onClick={(e) => { e.stopPropagation(); handleMoveLower(tech, -1); }}
-              />
-              <Button
-                icon={<DeleteOutlined />}
-                type="default"
-                title={t('Delete')}
-                aria-label={t('Delete')}
-                onClick={(e) => { e.stopPropagation(); handleRemoveLower(tech); }}
-              />
-              <Button
-                icon={<RedoOutlined />}
-                type="default"
-                title={t('Reset')}
-                aria-label={t('Reset')}
-                onClick={(e) => { e.stopPropagation(); handleResetLower(tech); }}
-              />
-              {/* <Button icon={<ShrinkOutlined />} />
-              <Button icon={<ArrowsAltOutlined />}/> */}
-            </span>
-            )}
-          </div>
-        );
-      })}
-      {/* 2026-07-31：副图加载/卸载骨架浮层 — loading + fading-out 两种状态（key=tech，位置用 indexOf 换算） */}
-      {Array.from(lowerLoadingStates).map((tech) => {
-        const paneIdx = props.lower.indexOf(tech) + 1;
-        const measuredTop = paneTops[paneIdx];
-        if (measuredTop === undefined) return null;
-        const top = measuredTop + 4;
-        const isFadingOut = pendingFadingOut.has(tech);
-        return (
-          <div
-            key={`pane-skeleton-${tech}`}
-            className={`pane-skeleton-overlay${isFadingOut ? ' fading-out' : ''}`}
-            style={{ top }}
-          >
-            <span className="skeleton-bar skeleton-name" />
-            <span className="skeleton-bar skeleton-value" />
-            <span className="skeleton-bar skeleton-btn" />
-            <span className="skeleton-bar skeleton-btn" />
-            <span className="skeleton-bar skeleton-btn" />
-            <span className="skeleton-bar skeleton-btn" />
-          </div>
-        );
-      })}
+      <InfoOverlay html={info} />
+      <ToolsHintOverlay
+        hint={toolHint}
+        mobile={props.mobile === true}
+        hidden={props.mobile === true && props.mobileDrawMode === true}
+      />
+      {props.lower.map((tech, idx) => (
+        <PaneTitleOverlay
+          key={`pane-title-${tech}`}
+          tech={tech}
+          idx={idx}
+          paneTop={paneLayouts[idx + 1]?.top}
+          isMobileLayout={props.mobile === true}
+          isError={lowerErrorStates.has(tech)}
+          desktopValue={lowerValues.get(tech)}
+          mobileResult={lowerResultsRef.current.get(tech)}
+          decimals={props.decimals}
+          onMove={handlePaneMoveUp}
+          onRemove={handleRemoveLower}
+          onReset={handleResetLower}
+        />
+      ))}
+      {Array.from(lowerLoadingStates).map((tech) => (
+        <PaneSkeletonOverlay
+          key={`pane-skeleton-${tech}`}
+          tech={tech}
+          paneTop={paneLayouts[props.lower.indexOf(tech) + 1]?.top}
+          isFadingOut={pendingFadingOut.has(tech)}
+        />
+      ))}
       <TextBoxLayer
         chart={chartRef.current}
         series={mainSeriesRef.current}
@@ -2511,43 +939,47 @@ export default function ChartPanel(props: ChartPanelProps) {
         selectedIndex={selectedTextBox}
         editingIndex={editingTextBox}
         placeholder={t('TextBoxPlaceholder')}
-        onSelect={(idx) => setSelectedTextBox(idx)}
-        onRequestEdit={(idx) => {
-          setSelectedTextBox(idx);
-          setEditingTextBox(idx);
-        }}
-        onCommit={(idx, text) => {
-          const mgr = drawingMgrRef.current;
-          if (!mgr) return;
-          if (text === '') {
-            // 空文字直接删除
-            mgr.deleteTextBox(idx);
-            setSelectedTextBox(null);
-          } else {
-            mgr.updateTextBox(idx, text);
-          }
-          setEditingTextBox(null);
-        }}
-        onMove={(idx, time, price) => {
-          drawingMgrRef.current?.moveTextBox(idx, time, price);
-        }}
+        onSelect={handleTextBoxSelect}
+        onRequestEdit={handleTextBoxRequestEdit}
+        onCommit={handleTextBoxCommit}
+        onMove={handleTextBoxMove}
         visible={props.drawingsVisible !== false}
       />
-      {/* 2026-09-01：移动端画线浮层 — 顶部持续步骤提示条 + 中下方悬浮删除按钮 (仅在画线模式时) */}
-      {props.mobileDrawMode === true && (
-        <MobileDrawOverlays
-          stepHint={drawInteraction.stepHint}
-          hasSelected={drawInteraction.selected !== null}
-          onDeleteSelected={drawInteraction.deleteSelected}
-        />
-      )}
-      {/* 2026-08-06：首屏加载覆盖层 — 首次进入页面图表数据加载期间显示 (3s 演示时长见 INITIAL_LOADING_MIN_MS) */}
-      {initialLoading && (
-        <div className="chart-loading-overlay">
-          <Spin size="large" />
-          <span className="chart-loading-text">{t('Loading')}…</span>
-        </div>
-      )}
+      {props.mobileDrawMode === true && (() => {
+        const sel = drawInteraction.selected;
+        const selObj = sel !== null ? drawingMgrRef.current?.objects[sel] : undefined;
+        const toolIdle = props.tool === TOOL.NONE;
+        const hasDrawingSel = toolIdle
+          && sel !== null && selObj !== undefined && !selObj.hidden;
+        const hasTextBoxSel = toolIdle
+          && selectedTextBox !== null && editingTextBox === null;
+        const hasSelected = hasDrawingSel || hasTextBoxSel;
+        const onDelete = hasTextBoxSel
+          ? () => {
+              if (selectedTextBox !== null) {
+                drawingMgrRef.current?.deleteTextBox(selectedTextBox);
+                setSelectedTextBox(null);
+              }
+            }
+          : drawInteraction.deleteSelected;
+        return (
+          <MobileDrawOverlays
+            stepHint={drawInteraction.stepHint}
+            hasSelected={hasSelected}
+            onDeleteSelected={onDelete}
+          />
+        );
+      })()}
+      <LoadingOverlay show={initialLoading} />
+      <EmptyOverlay
+        show={(mainDataState === 'empty' || mainDataState === 'error') && !initialLoading}
+        onRetry={retryLoad}
+      />
     </div>
   );
 }
+
+// 防止 TS6133 警告 — 这些仅作为类型/Ref 类型注解使用，运行时不需要
+void ProsticksPrimitive;
+void IchimokuPrimitive;
+void DrawingManager;

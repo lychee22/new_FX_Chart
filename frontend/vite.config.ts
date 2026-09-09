@@ -12,12 +12,12 @@ export default defineConfig({
     // 开发期把 /api 请求代理到 Spring Boot, 避免 CORS
     proxy: {
       '/api': {
-        target: 'http://127.0.0.1:23721',
+        target: 'http://127.0.0.1:23719',
         changeOrigin: true,
       },
       // 2026-07-21 22:44:03：开发环境保持与 iframe 生产环境相同的相对 WebSocket 地址。
       '/ws': {
-        target: 'ws://127.0.0.1:23721',
+        target: 'ws://127.0.0.1:23719',
         ws: true,
         changeOrigin: true,
       },

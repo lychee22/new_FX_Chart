@@ -47,9 +47,15 @@ export const STRINGS = {
     LoadFailed: 'Failed to load data',
     // 2026-08-06：首屏加载中提示
     Loading: 'Loading',
+    // 2026-09-04：接口无数据/兜底占位文案（主图全屏占位 / 品种下拉空状态）
+    NoData: 'No data available',
+    NoDataRetryHint: 'Please refresh and try again',
+    NoInstruments: 'No instruments',
+    // 2026-09-04：副图数据异常浮层文案（从 ChartPanel 内硬编码中文 i18n 化）
+    LowerDataError: 'Data error, hidden',
     // 2026-07-31：单类工具数量上限提示（除画线外每类最多 5 个）
     LimitReached: 'Reached the limit (max 5). Please clear existing drawings first.',
-    RightClickCancel: 'Right-click to cancel',
+    RightClickCancel: 'Right-click to finish',
     CancelDraw: 'Cancel',
     // 字段
     o: 'O', h: 'H', l: 'L', c: 'C', v: 'V', mp: 'MP', mc: 'MC', mpc: 'MP(C)', ar: 'AR',
@@ -65,6 +71,21 @@ export const STRINGS = {
     GoldenSection: 'Fibonacci', DeleteAllDrawings: 'Delete All',
     HideDrawings: 'Hide Drawings', ShowDrawings: 'Show Drawings',
     FinishDrawing: 'Done',
+    // 2026-09-04：移动端画线进行中禁止切换其他抽屉按钮 — 提示用户先完成当前绘图。
+    FinishDrawingFirst: 'Please complete the current drawing first',
+    // 2026-09-02：移动端画线抽屉内的"按步演进"步骤提示 (顶部居中 pill 文案)
+    DrawStepTrendlineStart: 'Tap to place start',
+    DrawStepTrendlineEnd: 'Tap to place end',
+    DrawStepChannelStart: 'Tap to place bottom-left corner',
+    DrawStepChannelTopLeft: 'Tap to place top-left corner',
+    DrawStepChannelTopRight: 'Tap to place top-right corner',
+    DrawStepFibRetStart: 'Tap to place start',
+    DrawStepFibRetEnd: 'Tap to set retracement end',
+    // 2026-09-07：移动端新增斐波那契投射三步走提示 (P1=基准段起点 / P2=基准段终点 / P3=投射起点)
+    DrawStepFibProStart: 'Tap to place base start (P1)',
+    DrawStepFibProBaseEnd: 'Tap to place base end (P2)',
+    DrawStepFibProProject: 'Tap to place projection point (P3)',
+    DrawStepDone: 'Done',
   },
   tc: {
     chart: '圖表',
@@ -101,9 +122,15 @@ export const STRINGS = {
     LoadFailed: '數據加載失敗',
     // 2026-08-06：首屏加載中提示
     Loading: '載入中',
+    // 2026-09-04：接口無數據/兜底占位文案（主圖全屏占位 / 品種下拉空狀態）
+    NoData: '暫無數據',
+    NoDataRetryHint: '請刷新後重試',
+    NoInstruments: '暫無品種',
+    // 2026-09-04：副圖數據異常浮層文案（從 ChartPanel 內硬編碼中文 i18n 化）
+    LowerDataError: '數據異常，已隱藏',
     // 2026-07-31：單類工具數量上限提示 (除畫線外每類最多 5 個)
     LimitReached: '已達上限 (最多 5 個),請先清除已繪內容。',
-    RightClickCancel: '按右鍵取消',
+    RightClickCancel: '按右鍵退出',
     CancelDraw: '取消',
     o: '開', h: '高', l: '低', c: '收', v: '成', mp: '聚焦點', mc: '聚焦量', mpc: '聚焦點(量)', ar: '活躍區',
     modal_point: '聚焦點', support: '支持', resistance: '阻力', latest_mp: '最新聚焦點', bull: '牛證', bear: '熊證',
@@ -117,6 +144,21 @@ export const STRINGS = {
     GoldenSection: '黃金比例', DeleteAllDrawings: '全部刪除',
     HideDrawings: '隱藏畫線', ShowDrawings: '顯示畫線',
     FinishDrawing: '完成畫線',
+    // 2026-09-04：移動端畫線進行中禁止切換其他抽屜按鈕 — 提示用戶先完成當前繪圖。
+    FinishDrawingFirst: '請先完成當前繪圖',
+    // 2026-09-02：移動端畫線抽屜內的"按步演進"步驟提示 (頂部居中 pill 文案)
+    DrawStepTrendlineStart: '點擊放置起點',
+    DrawStepTrendlineEnd: '點擊放置終點',
+    DrawStepChannelStart: '點擊放置左下角',
+    DrawStepChannelTopLeft: '點擊放置左上角',
+    DrawStepChannelTopRight: '點擊放置右上角',
+    DrawStepFibRetStart: '點擊放置起點',
+    DrawStepFibRetEnd: '點擊確定回調終點',
+    // 2026-09-07：移動端新增斐波那契投射三步走提示 (P1=基準段起點 / P2=基準段終點 / P3=投射起點)
+    DrawStepFibProStart: '點擊放置基準段起點 (P1)',
+    DrawStepFibProBaseEnd: '點擊放置基準段終點 (P2)',
+    DrawStepFibProProject: '點擊放置投射起點 (P3)',
+    DrawStepDone: '已完成',
   },
   sc: {
     chart: '图表',
@@ -153,9 +195,15 @@ export const STRINGS = {
     LoadFailed: '数据加载失败',
     // 2026-08-06：首屏加载中提示
     Loading: '加载中',
+    // 2026-09-04：接口无数据/兜底占位文案（主图全屏占位 / 品种下拉空状态）
+    NoData: '暂无数据',
+    NoDataRetryHint: '请刷新后重试',
+    NoInstruments: '暂无品种',
+    // 2026-09-04：副图数据异常浮层文案（从 ChartPanel 内硬编码中文 i18n 化）
+    LowerDataError: '数据异常，已隐藏',
     // 2026-07-31：单类工具数量上限提示（除画线外每类最多 5 个）
     LimitReached: '已达上限 (最多 5 个),请先清除已绘内容。',
-    RightClickCancel: '右键取消',
+    RightClickCancel: '右键退出',
     CancelDraw: '取消',
     o: '开', h: '高', l: '低', c: '收', v: '成', mp: '聚集点', mc: '聚焦量', mpc: '聚集点(量)', ar: '活跃区',
     modal_point: '聚焦点', support: '支持', resistance: '阻力', latest_mp: '最新聚焦点', bull: '牛证', bear: '熊证',
@@ -169,6 +217,21 @@ export const STRINGS = {
     GoldenSection: '黄金比例', DeleteAllDrawings: '全部删除',
     HideDrawings: '隐藏画线', ShowDrawings: '显示画线',
     FinishDrawing: '完成画线',
+    // 2026-09-04：移动端画线进行中禁止切换其他抽屉按钮 — 提示用户先完成当前绘图。
+    FinishDrawingFirst: '请先完成当前绘图',
+    // 2026-09-02：移动端画线抽屉内的"按步演进"步骤提示 (顶部居中 pill 文案)
+    DrawStepTrendlineStart: '点击放置起点',
+    DrawStepTrendlineEnd: '点击放置终点',
+    DrawStepChannelStart: '点击放置左下角',
+    DrawStepChannelTopLeft: '点击放置左上角',
+    DrawStepChannelTopRight: '点击放置右上角',
+    DrawStepFibRetStart: '点击放置起点',
+    DrawStepFibRetEnd: '点击确定回调终点',
+    // 2026-09-07：移动端新增斐波那契投射三步走提示 (P1=基准段起点 / P2=基准段终点 / P3=投射起点)
+    DrawStepFibProStart: '点击放置基准段起点 (P1)',
+    DrawStepFibProBaseEnd: '点击放置基准段终点 (P2)',
+    DrawStepFibProProject: '点击放置投射起点 (P3)',
+    DrawStepDone: '已完成',
   },
 } as const;
 

@@ -2,25 +2,20 @@
 // PC / 移动端共用同一个 ChartPanel, 图表渲染区零差异
 // 顶部导航与外围 UI 走 antd 组件
 
-import { useState, useMemo, useCallback, useEffect, useRef } from 'react';
-import type { PointerEvent as ReactPointerEvent } from 'react';
-import { Button, Tooltip } from 'antd';
+import { useState, useMemo, useCallback, useEffect } from 'react';
+import { Button } from 'antd';
 import {
-  ClearOutlined,
+  ArrowsAltOutlined,
   EditOutlined,
   FullscreenExitOutlined,
-  FullscreenOutlined,
   SettingOutlined,
   SwapOutlined,
-  UndoOutlined,
 } from '@ant-design/icons';
 import { useI18n } from '../i18n';
 import { useLandscapeFullscreen } from '../hooks/useLandscapeFullscreen';
-import type { Instrument } from '../types';
+import type { MobileLayoutProps } from '../types';
 import { INTERVAL, UPPER_TECH, LOWER_TECH } from '../types';
-import type { NationPalette } from '../constants/nation';
 import { defaultParamsFor } from '../constants/indicatorParams';
-import { TOOL } from '../drawing/tools';
 import ChartPanel from '../components/ChartPanel';
 import { MobileShell } from './MobileShell';
 import { MobileTopBar } from './MobileTopBar';
@@ -32,78 +27,10 @@ import {
   LOWER_OPTIONS,
 } from './MobileSettingsPanel';
 // 2026-09-01：移动端画线会话状态机 (抽屉/显隐/退出清理) + 抽屉
-import { useMobileDrawingSession } from './useMobileDrawingSession';
+import { useMobileDrawingSession } from '../hooks/useMobileDrawingSession';
 import { MobileDrawingDrawer } from './MobileDrawingDrawer';
+import { LOWER_CYCLE } from '../constants/chart';
 
-// 轻点判定: pointer 位移小于该值视为轻点, 否则视为拖动/平移
-const TAP_MOVE_THRESHOLD = 8;
-
-// 2026-08-04：点击副图循环切换的指标顺序 (与 MobileSettingsPanel 的 LOWER_OPTIONS 一致,
-// 末尾 NONE = 关闭副图, 循环回到开头)
-const LOWER_CYCLE: number[] = [
-  LOWER_TECH.VOLUME, LOWER_TECH.RSI, LOWER_TECH.MACD, LOWER_TECH.STC, LOWER_TECH.MOM,
-  LOWER_TECH.PCTR, LOWER_TECH.OBV, LOWER_TECH.MC, LOWER_TECH.ROC, LOWER_TECH.ADX,
-  LOWER_TECH.MFI, LOWER_TECH.VOLA, LOWER_TECH.CCI, LOWER_TECH.ATR, LOWER_TECH.NONE,
-];
-
-interface MobileLayoutProps {
-  /** 2026-08-04：设备类型 — 触摸屏设备(pointer: coarse)为 true, 透传给 ChartPanel */
-  mobile?: boolean;
-  instruments: Instrument[];
-  code: string;
-  interval: number;
-  chartType: number;
-  upper: number;
-  /** 2026-08-04：叠加指标参数 (设置面板接入, 真实传给后端) */
-  upperParams: number[];
-  lower: number[];
-  /** 2026-08-04：副图指标参数 (设置面板接入, 真实传给后端) */
-  lowerParams: number[];
-  tool: number;
-  decimals: number;
-  /** 区域配色 (按后端 nation 字段切换) */
-  palette: NationPalette;
-  titleText: string;
-  onCodeChange: (v: string) => void;
-  onIntervalChange: (v: number) => void;
-  onChartTypeChange: (v: number) => void;
-  onUpperChange: (v: number) => void;
-  /** 2026-08-04：叠加指标参数变化 (设置面板套用) */
-  onUpperParamsChange: (p: number[]) => void;
-  onLowerChange: (v: number) => void;
-  /** 2026-08-04：副图指标参数变化 (设置面板套用) */
-  onLowerParamsChange: (p: number[]) => void;
-  onToolChange: (v: number) => void;
-  onZoomOut: () => void;
-  onZoomIn: () => void;
-  onShiftLeft: () => void;
-  onShiftRight: () => void;
-  /** 2026-07-29：副图上下移动 (桌面端浮层用, 移动端保留接口占位) */
-  onReorderLower: (tech: number, dir: -1 | 1) => void;
-  /** 2026-07-29：删除指定副图 */
-  onRemoveLower: (tech: number) => void;
-  registerExport: (fn: () => void) => void;
-  /** 2026-08-05：手动刷新入口 (顶栏刷新按钮) */
-  onRefresh: () => void;
-  /** 2026-08-06：刷新进行中 — 顶栏刷新图标旋转转圈 (不影响界面展示) */
-  refreshing: boolean;
-  /** 2026-08-06：ChartPanel 刷新状态上报 — 转发给内部 ChartPanel, 由 App 驱动按钮转圈 */
-  onRefreshingChange?: (refreshing: boolean) => void;
-  /** 2026-08-05：注册 ChartPanel 的 refreshAllData (刷新按钮与 WS 重连重拉共用) */
-  registerRefresh: (fn: () => void) => void;
-  /** 2026-07-30：撤销最后一个绘图 */
-  onUndo: () => void;
-  /** 2026-07-30：是否有可撤销对象 */
-  canUndo: boolean;
-  /** 2026-07-30：通知父组件 canUndo 变化 */
-  registerCanUndo: (can: boolean) => void;
-  /** 2026-07-31：清除所有已绘制对象 */
-  onClearAll: () => void;
-  /** 2026-07-31：是否有可清除对象 */
-  canClear: boolean;
-  /** 2026-07-31：通知父组件 canClear 变化 */
-  registerCanClear: (can: boolean) => void;
-}
 
 /** 移动端整体布局入口, 已在外部用 useIsMobile 隔离 */
 export default function MobileLayout(props: MobileLayoutProps) {
@@ -176,28 +103,18 @@ export default function MobileLayout(props: MobileLayoutProps) {
       { value: 5, label: t('TypeModalLine') },
       { value: 6, label: t('TypeLine') },
       { value: 7, label: t('TypeArea') },
-      // 2026-07-31：主图叠加成交量直方图
       { value: 8, label: t('TypeMainVolume') },
     ],
     [t],
   );
 
-  // 2026-09-01：移除 toolOptions (竖屏工具栏不再提供画线下拉入口, 移动端画线仅横屏抽屉)
-
-  // 当前选中项的标签
-  const currentCodeLabel = codeOptions.find((o) => o.value === props.code)?.label ?? props.code;
   const currentIntervalLabel =
     intervalOptions.find((o) => o.value === props.interval)?.label ?? '';
   const currentTypeLabel =
     typeOptions.find((o) => o.value === props.chartType)?.label ?? '';
-  // 2026-09-01：currentToolLabel 不再需要 (工具栏按钮已被抽屉替代)
-
-  // 图表区横屏观看 — 逻辑封装在 useLandscapeFullscreen (iOS Safari / Quark / WebView 兼容),
-  // 经重命名别名保持下方引用不变。
   const {
     wrapRef: chartWrapRef,
     isFullscreen: isChartFullscreen,
-    enterLandscape,
     exitLandscape,
     toggleFullscreen,
   } = useLandscapeFullscreen();
@@ -209,6 +126,26 @@ export default function MobileLayout(props: MobileLayoutProps) {
     props.tool,
     props.onToolChange,
   );
+
+  // 2026-09-04：画线进行中状态 — useChartDrawInteraction 通过 chart:drawing-in-progress
+  // 事件广播 (true=有 pendingPoints 待定锚点, false=已完成/切到 NONE)。
+  // 抽屉按钮根据此状态 disabled + 触发 "请先完成绘图" 提示。
+  const [drawInProgress, setDrawInProgress] = useState(false);
+  // 2026-09-07：每类工具对象数量 — 由 ChartPanel 通过 registerDrawingCounts 上报,
+  // 用于移动端工具按钮 onClick 时提前检查上限 (已达 5 个则弹 LimitReached 不进入激活态)。
+  const [drawingCounts, setDrawingCounts] = useState<Record<number, number>>({});
+  const registerDrawingCounts = useCallback(
+    (counts: Record<number, number>) => setDrawingCounts(counts),
+    [],
+  );
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const v = (e as CustomEvent<boolean>).detail;
+      setDrawInProgress(v);
+    };
+    window.addEventListener('chart:drawing-in-progress', handler);
+    return () => window.removeEventListener('chart:drawing-in-progress', handler);
+  }, []);
 
   // 2026-08-05：图表内触屏切换副图入口的专用通道 — 设置 __mobileLowerTap 标志,
   // ChartPanel 据此区分入口: 触屏切换不重置主图缩放/不重绘叠加指标; 设置面板入口不受影响。
@@ -241,48 +178,6 @@ export default function MobileLayout(props: MobileLayoutProps) {
     [t],
   );
 
-  // 图表区域轻点 → 进入横屏观看 (pointer 位移阈值区分轻点/拖动, 避免平移图表误触发)
-  const tapStartRef = useRef<{ x: number; y: number; pointerId: number } | null>(null);
-
-  const onChartWrapPointerDown = (e: ReactPointerEvent<HTMLDivElement>) => {
-    if (e.pointerType === 'mouse' && e.button !== 0) return;
-    const target = e.target as HTMLElement;
-    // 忽略落在交互子元素 / 浮层 / 退出按钮上的按下
-    const hit = target.closest(
-      '.info-overlay, .tools-hint, .pane-title-overlay, .pane-skeleton-overlay, ' +
-      '.lw-textbox, .lw-textbox__content, .mobile-landscape-exit, button, a, input, [role="option"], ' +
-      '.ant-drawer-mask',  // 2026-08-04：点击 Drawer 遮罩关闭时误触轻点进入全屏
-    );
-    if (hit) return;
-    tapStartRef.current = { x: e.clientX, y: e.clientY, pointerId: e.pointerId };
-  };
-
-  const onChartWrapPointerUp = (e: ReactPointerEvent<HTMLDivElement>) => {
-    const start = tapStartRef.current;
-    tapStartRef.current = null;
-    if (!start || start.pointerId !== e.pointerId) return;
-
-    // 位移超阈值 → 是拖动/平移 (图表左右滑动查看历史 K 线)
-    if (Math.hypot(e.clientX - start.x, e.clientY - start.y) > TAP_MOVE_THRESHOLD) return;
-
-    // 松开时目标也做一次过滤 (手指可能滑到子元素上)
-    const target = e.target as HTMLElement;
-    const upHit = target.closest('.mobile-landscape-exit, button, a, .info-overlay, .tools-hint, .lw-textbox');
-    if (upHit) return;
-
-    // 2026-09-01：全屏状态下单击屏幕不再退出全屏 (避免触屏画线时误触退出) —
-    // 退出全屏仅靠右上角退出按钮。点空白处也只是 no-op。
-    if (isChartFullscreen) return;
-
-    // 守卫: 绘图工具激活 / 有 sheet 打开时均不进入
-    if (props.tool !== TOOL.NONE) return;
-    if (codeSheetOpen || intervalSheetOpen || typeSheetOpen || settingsOpen) return;
-
-    void enterLandscape();
-  };
-
-  const onChartWrapPointerCancel = () => { tapStartRef.current = null; };
-
   return (
     <MobileShell
       className={isChartFullscreen ? 'is-chart-fullscreen' : ''}
@@ -291,7 +186,6 @@ export default function MobileLayout(props: MobileLayoutProps) {
         <MobileTopBar
           instrument={currentInstrument}
           onBack={() => window.history.back()}
-          onFullscreen={toggleFullscreen}
           onSearch={() => setCodeSheetOpen(true)}
           onTitleClick={() => setCodeSheetOpen(true)}
           onRefresh={props.onRefresh}
@@ -311,10 +205,12 @@ export default function MobileLayout(props: MobileLayoutProps) {
                   {currentIntervalLabel} <SwapOutlined />
                 </Button>
                 <Button onClick={() => setTypeSheetOpen(true)}>{currentTypeLabel}</Button>
+                
                 {/* 2026-08-27：三个圆形操作按钮归于同一组, 空间不足时整组换到下一行,
                     避免窄屏下单独圆按钮把工具栏撑出容器。 */}
                 <div className="mobile-toolbar-actions">
-                  <Button
+                  <Button shape='circle' icon={<ArrowsAltOutlined />} onClick={() => toggleFullscreen()}/>
+                  {/* <Button
                     shape="circle"
                     icon={<UndoOutlined />}
                     disabled={!props.canUndo}
@@ -327,7 +223,7 @@ export default function MobileLayout(props: MobileLayoutProps) {
                     disabled={!props.canClear}
                     onClick={props.onClearAll}
                     aria-label={t('ClearAll')}
-                  />
+                  /> */}
                   <Button
                     shape="circle"
                     icon={<SettingOutlined />}
@@ -337,15 +233,9 @@ export default function MobileLayout(props: MobileLayoutProps) {
               </div>
             )}
 
-            {/* 图表区: 与 PC 共用, 全屏时被系统 requestFullscreen 接管;
-                轻点图表空白处进入横屏观看 (pointer 位移阈值 + 工具/浮层守卫) */}
-            <div
-              className="mobile-chart-wrap"
-              ref={chartWrapRef}
-              onPointerDown={onChartWrapPointerDown}
-              onPointerUp={onChartWrapPointerUp}
-              onPointerCancel={onChartWrapPointerCancel}
-            >
+            {/* 图表区: 与 PC 共用, 全屏时被系统 requestFullscreen 接管。
+                2026-09-04：轻点图表不再进入全屏, 进入全屏仅限工具栏全屏按钮。 */}
+            <div className="mobile-chart-wrap" ref={chartWrapRef}>
               <ChartPanel
                 code={props.code}
                 interval={props.interval}
@@ -358,26 +248,19 @@ export default function MobileLayout(props: MobileLayoutProps) {
                 decimals={props.decimals}
                 palette={props.palette}
                 mobile={props.mobile}
-                onZoomOut={props.onZoomOut}
-                onZoomIn={props.onZoomIn}
-                onShiftLeft={props.onShiftLeft}
-                onShiftRight={props.onShiftRight}
                 onReorderLower={props.onReorderLower}
                 onRemoveLower={props.onRemoveLower}
                 registerExport={props.registerExport}
                 registerRefresh={props.registerRefresh}
                 onRefreshingChange={props.onRefreshingChange}
-                onUndo={props.onUndo}
-                canUndo={props.canUndo}
-                registerCanUndo={props.registerCanUndo}
                 onToolChange={props.onToolChange}
-                onClearAll={props.onClearAll}
-                registerCanClear={props.registerCanClear}
                 fullscreen={isChartFullscreen}
                 onCycleLower={cycleLower}
                 // 2026-09-01：移动端画线交互 — 抽屉开关 + 全局显隐
                 mobileDrawMode={drawSession.drawerOpen}
                 drawingsVisible={drawSession.drawingsVisible}
+                // 2026-09-07：每类工具对象数量变化上报 — 驱动工具按钮提前检查上限
+                registerDrawingCounts={registerDrawingCounts}
               />
               {/* 2026-08-04：全屏悬浮工具栏 — 渲染在 chartWrap 内 (fullscreen 元素中),
                   包含:  周期 / 主图类型 */}
@@ -399,7 +282,7 @@ export default function MobileLayout(props: MobileLayoutProps) {
                         {currentIntervalLabel} <SwapOutlined />
                       </Button>
                       <Button onClick={() => setTypeSheetOpen(true)}>{currentTypeLabel}</Button>
-                      <Button
+                      {/* <Button
                         shape="circle"
                         icon={<UndoOutlined />}
                         disabled={!props.canUndo}
@@ -412,7 +295,7 @@ export default function MobileLayout(props: MobileLayoutProps) {
                         disabled={!props.canClear}
                         onClick={props.onClearAll}
                         aria-label={t('ClearAll')}
-                      />
+                      /> */}
                     </>
                   )}
                 </div>
@@ -425,10 +308,16 @@ export default function MobileLayout(props: MobileLayoutProps) {
                   tool={props.tool}
                   canDeleteAll={props.canClear}
                   drawingsVisible={drawSession.drawingsVisible}
+                  // 2026-09-04：画线进行中 → 抽屉按钮全部锁定, 点击弹 "请先完成绘图"
+                  inProgress={drawInProgress}
+                  // 2026-09-07：每类工具对象数量 — 用于点击工具按钮时提前检查上限
+                  drawingCounts={drawingCounts}
                   onToolChange={drawSession.setTool}
                   onDeleteAll={props.onClearAll}
                   onToggleVisible={drawSession.toggleVisible}
                   onFinish={drawSession.finishDrawing}
+                  // 2026-09-07：仅取消当前未完成的画线，保留画线工具
+                  onCancelPending={drawSession.cancelPendingDrawing}
                 />
               )}
               {/* 横屏观看退出按钮: 置于 fullscreen 元素内, TopBar 全屏时已隐藏 */}

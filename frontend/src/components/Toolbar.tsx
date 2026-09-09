@@ -1,11 +1,12 @@
 import { useState, useRef, useEffect } from 'react';
+import { message } from 'antd';
 import { useI18n } from '../i18n';
 import type { StringKey } from '../i18n';
 import { INTERVAL, UPPER_TECH, LOWER_TECH } from '../types';
 import type { Instrument as Inst } from '../types';
 
 // 工具栏选项配置 (对齐旧系统 charttest5.html 的下拉)
-import { TOOLS } from '../drawing/tools';
+import { TOOLS, LIMITED_TOOLS, MAX_PER_TYPE } from '../drawing/tools';
 
 interface ToolbarProps {
   instruments: Inst[];
@@ -36,6 +37,14 @@ interface ToolbarProps {
   onClearAll: () => void;
   /** 2026-07-31：是否有可清除对象 (扫帚按钮 disabled 状态) */
   canClear: boolean;
+  /** 2026-09-04：品种列表加载失败标记 — 触发品种下拉旁的"暂无品种"徽标 */
+  instrumentsError: boolean;
+  /** 2026-09-04：重试拉取品种列表 — 独立于 onRefresh (后者只重拉图表数据) */
+  onRetryInstruments: () => void;
+  // 2026-09-07：每类工具当前已绘数量 (key=TOOL.*, value=count) — 受限工具 (LIMITED_TOOLS
+  // 内除 TRENDLINE 外) 已有 5 个时, 选中对应工具立即弹 LimitReached 并阻断进入激活态。
+  // 与移动端 MobileDrawingDrawer 的预检保持一致行为。
+  drawingCounts?: Record<number, number>;
 }
 
 // 副图指标选项 (勾选式)
@@ -128,16 +137,49 @@ export default function Toolbar(props: ToolbarProps) {
   const { t, lang, setLang } = useI18n();
   const p = props;
 
+  // 2026-09-07：受限工具 (LIMITED_TOOLS 内除 TRENDLINE 外) 上限预检 — 已有 5 个时
+  // 弹 LimitReached 并阻止 setTool 进入激活态, 避免用户在画线下拉里"选中了却点不动"。
+  // 与移动端 MobileDrawingDrawer.tsx:125-131 的预检保持一致。
+  const handleToolSelect = (toolId: number) => {
+    if (LIMITED_TOOLS.has(toolId)) {
+      const count = p.drawingCounts?.[toolId] ?? 0;
+      if (count >= MAX_PER_TYPE) {
+        message.warning(t('LimitReached'));
+        return;
+      }
+    }
+    p.onToolChange(toolId);
+  };
+
   return (
     <div className="toolbar" role="toolbar" aria-label="Chart controls">
-      {/* 品种 */}
-      <select value={p.code} onChange={(e) => p.onCodeChange(e.target.value)} title={t('chart')} aria-label={t('chart')}>
-        {p.instruments.map((it) => (
-          <option key={it.code} value={it.code}>
-            {it.name}
-          </option>
-        ))}
-      </select>
+      {/* 品种 — 2026-09-04：外层包 div 并排显示"暂无品种"重试徽标 (失败时显示) */}
+      <div className="toolbar-instrument-group">
+        <select
+          value={p.code}
+          onChange={(e) => p.onCodeChange(e.target.value)}
+          title={t('chart')}
+          aria-label={t('chart')}
+          disabled={p.instruments.length === 0}
+        >
+          {p.instruments.map((it) => (
+            <option key={it.code} value={it.code}>
+              {it.name}
+            </option>
+          ))}
+        </select>
+        {p.instrumentsError && (
+          <button
+            type="button"
+            className="toolbar-instrument-retry"
+            onClick={p.onRetryInstruments}
+            title={t('NoInstruments')}
+            aria-label={t('NoInstruments')}
+          >
+            ⚠ {t('NoInstruments')} ⟳
+          </button>
+        )}
+      </div>
 
       {/* 周期 */}
       <select value={p.interval} onChange={(e) => p.onIntervalChange(Number(e.target.value))} aria-label={t('Daily')}>
@@ -184,7 +226,7 @@ export default function Toolbar(props: ToolbarProps) {
       <MultiSelectDropdown selected={p.lower} options={LOWER_OPTIONS} onChange={p.onLowerChange} />
 
       {/* 绘图工具 */}
-      <select value={p.tool} onChange={(e) => p.onToolChange(Number(e.target.value))} aria-label={t('Tools')}>
+      <select value={p.tool} onChange={(e) => handleToolSelect(Number(e.target.value))} aria-label={t('Tools')}>
         {TOOLS.map((tool) => (
           <option key={tool.id} value={tool.id}>
             {t(tool.labelKey)}

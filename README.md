@@ -291,7 +291,7 @@ Prosticks 是旧系统的核心专有形态。新系统通过 Lightweight Charts
 ```bash
 cd backend
 mvn clean package
-java -jar target/chart-backend-1.0.0.jar
+java -jar target/forex-chart.jar
 ```
 
 ### 前端打包
@@ -301,7 +301,7 @@ npm run build      # 输出到 dist/
 # 用任意静态服务器托管 dist/, 或由后端/ nginx 托管
 ```
 
-> 正式部署可把前端 `dist/` 交给 Nginx/Caddy 托管，并把 `/api`、`/ws` 反向代理到本机 23723。当前无 Nginx 时可按 `LINUX_DEPLOYMENT_20260722.md` 使用 Vite preview 验证效果。
+> 正式部署可把前端 `dist/` 交给 Nginx/Caddy 托管，并把 `/api`、`/ws` 反向代理到本机 23723。当前无 Nginx 时可按 `docs/deployment/2026-07-22_linux-deployment.md` 使用 Vite preview 验证效果。
 > 修改 `frontend/src/api/client.ts` 的 `baseURL` 为生产后端地址。
 
 ---
