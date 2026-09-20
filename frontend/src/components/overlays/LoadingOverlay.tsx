@@ -1,3 +1,5 @@
+// 2026-09-10：memo 化 — show=false 期间完全跳过渲染。
+import { memo } from 'react';
 import { Spin } from 'antd';
 import { useI18n } from '../../i18n';
 
@@ -7,7 +9,7 @@ export interface LoadingOverlayProps {
   show: boolean;
 }
 
-export function LoadingOverlay({ show }: LoadingOverlayProps) {
+export const LoadingOverlay = memo(function LoadingOverlay({ show }: LoadingOverlayProps) {
   const { t } = useI18n();
   if (!show) return null;
   return (
@@ -16,4 +18,4 @@ export function LoadingOverlay({ show }: LoadingOverlayProps) {
       <span className="chart-loading-text">{t('Loading')}…</span>
     </div>
   );
-}
+});

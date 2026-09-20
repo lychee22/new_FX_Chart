@@ -12,7 +12,7 @@ import {
   SwapOutlined,
 } from '@ant-design/icons';
 import { useI18n } from '../i18n';
-import { useLandscapeFullscreen } from '../hooks/useLandscapeFullscreen';
+import { useLandscapeFullscreen } from '../hooks';
 import type { MobileLayoutProps } from '../types';
 import { INTERVAL, UPPER_TECH, LOWER_TECH } from '../types';
 import { defaultParamsFor } from '../constants/indicatorParams';
@@ -27,7 +27,7 @@ import {
   LOWER_OPTIONS,
 } from './MobileSettingsPanel';
 // 2026-09-01：移动端画线会话状态机 (抽屉/显隐/退出清理) + 抽屉
-import { useMobileDrawingSession } from '../hooks/useMobileDrawingSession';
+import { useMobileDrawingSession } from '../hooks';
 import { MobileDrawingDrawer } from './MobileDrawingDrawer';
 import { LOWER_CYCLE } from '../constants/chart';
 
@@ -210,20 +210,8 @@ export default function MobileLayout(props: MobileLayoutProps) {
                     避免窄屏下单独圆按钮把工具栏撑出容器。 */}
                 <div className="mobile-toolbar-actions">
                   <Button shape='circle' icon={<ArrowsAltOutlined />} onClick={() => toggleFullscreen()}/>
-                  {/* <Button
-                    shape="circle"
-                    icon={<UndoOutlined />}
-                    disabled={!props.canUndo}
-                    onClick={props.onUndo}
-                    aria-label={t('Undo')}
-                  />
-                  <Button
-                    shape="circle"
-                    icon={<ClearOutlined />}
-                    disabled={!props.canClear}
-                    onClick={props.onClearAll}
-                    aria-label={t('ClearAll')}
-                  /> */}
+                  {/* 2026-09-10：撤销/清除圆形按钮 2026-09-01 起已注释停用, 随死 props (onUndo/canUndo)
+                      一并清理; 如需恢复见 git 历史 (props 走 chart:undo / chart:clear-all 事件)。 */}
                   <Button
                     shape="circle"
                     icon={<SettingOutlined />}
@@ -282,20 +270,6 @@ export default function MobileLayout(props: MobileLayoutProps) {
                         {currentIntervalLabel} <SwapOutlined />
                       </Button>
                       <Button onClick={() => setTypeSheetOpen(true)}>{currentTypeLabel}</Button>
-                      {/* <Button
-                        shape="circle"
-                        icon={<UndoOutlined />}
-                        disabled={!props.canUndo}
-                        onClick={props.onUndo}
-                        aria-label={t('Undo')}
-                      />
-                      <Button
-                        shape="circle"
-                        icon={<ClearOutlined />}
-                        disabled={!props.canClear}
-                        onClick={props.onClearAll}
-                        aria-label={t('ClearAll')}
-                      /> */}
                     </>
                   )}
                 </div>

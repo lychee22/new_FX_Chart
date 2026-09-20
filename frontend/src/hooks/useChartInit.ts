@@ -12,7 +12,7 @@
 //
 // 返回 { renderMainSeries, fitTimeScaleDefault, syncPaneLayout } 供其他 hook 调用。
 
-import { useEffect, type Dispatch, type MutableRefObject, type SetStateAction } from 'react';
+import { useCallback, useEffect, type Dispatch, type MutableRefObject, type SetStateAction } from 'react';
 import {
   createChart,
   CandlestickSeries,
@@ -30,10 +30,11 @@ import {
 import type { Bar, NationPalette } from '../types';
 import { TARGET_BAR_SPACING, MOBILE_MIN_VISIBLE_BARS, PC_MIN_VISIBLE_BARS } from '../constants/chart';
 import { DrawingManager } from '../drawing/DrawingManager';
-import { ProsticksPrimitive } from '../primitives/ProsticksPrimitive';
+import { ProsticksPrimitive } from './primitives/ProsticksPrimitive';
 import { TOOL } from '../drawing/tools';
 import { TYPE } from '../utils/chartTypes';
-import type { TextBoxEntry } from '../components/TextBoxLayer';
+import { buildHandleScroll } from '../utils/chartOptions';
+import type { TextBoxEntry, TextBoxSel } from '../components/TextBoxLayer';
 
 export interface UseChartInitDeps {
   containerRef: React.RefObject<HTMLDivElement | null>;
@@ -55,10 +56,11 @@ export interface UseChartInitDeps {
   mobile: boolean;
   palette: NationPalette;
   // 文字框/绘图订阅的 setState
+  // 2026-09-10：selected/editing 合并为单一 TextBoxSel（editing 必然隐含 selected，
+  // 原两 state 所有写入点均成对 set）；drawingCounts state 已删除（真值源为
+  // mgr.objects，组件侧按需直接计数，本 hook 仅保留 registerDrawingCounts 上报）。
   setTextBoxes: Dispatch<SetStateAction<TextBoxEntry[]>>;
-  setSelectedTextBox: Dispatch<SetStateAction<number | null>>;
-  setEditingTextBox: Dispatch<SetStateAction<number | null>>;
-  setDrawingCounts: Dispatch<SetStateAction<Record<number, number>>>;
+  setTextBoxSel: Dispatch<SetStateAction<TextBoxSel | null>>;
   registerDrawingCounts?: (counts: Record<number, number>) => void;
   // 工具切换的 onToolChange (contextmenu 用)
   onToolChange: (tool: number) => void;
@@ -87,8 +89,8 @@ export function useChartInit(deps: UseChartInitDeps): UseChartInitApi {
     fullscreenRef, mobileRef, mobileDrawModeRef,
     updateInfoOverlayRef, handleChartClickRef,
     mobile, palette,
-    setTextBoxes, setSelectedTextBox, setEditingTextBox,
-    setDrawingCounts, registerDrawingCounts,
+    setTextBoxes, setTextBoxSel,
+    registerDrawingCounts,
     onToolChange,
   } = deps;
 
@@ -144,19 +146,19 @@ export function useChartInit(deps: UseChartInitDeps): UseChartInitApi {
     const refreshTextBoxes = () => {
       const data = mgr.getTextBoxes();
       setTextBoxes(data);
-      setSelectedTextBox((prev) => (prev === null || data.some((d) => d.index === prev) ? prev : null));
-      setEditingTextBox((prev) => (prev === null || data.some((d) => d.index === prev) ? prev : null));
+      // 2026-09-10：合并后失效守卫 — idx 不再指向任何现存文字框时整体置空
+      // (editing 必然隐含 selected, 单一对象无需分别判空)。
+      setTextBoxSel((prev) => (prev === null || data.some((d) => d.index === prev.idx) ? prev : null));
     };
     refreshTextBoxes();
     const unsubscribeTextBoxes = mgr.subscribeTextBoxesChanged(refreshTextBoxes);
 
-    // 2026-09-07：每类工具数量变化订阅 — 移动端工具按钮需要在点击瞬间判断是否已达上限,
-    // 因此必须保持 React state 与 mgr.objects 实时同步。这里直接重算 Map<TOOL, count>。
+    // 2026-09-07：每类工具数量变化订阅 — 重算 Map<TOOL, count> 上报父组件
+    // (MobileLayout → MobileDrawingDrawer), 让工具按钮能实时判断上限。
+    // 2026-09-10：组件内部预检已改为直接数 mgr.objects, 不再镜像 React state。
     const refreshDrawingCounts = () => {
       const counts: Record<number, number> = {};
       mgr.objects.forEach((o) => { counts[o.type] = (counts[o.type] ?? 0) + 1; });
-      setDrawingCounts(counts);
-      // 上报到父组件 (MobileLayout → MobileDrawingDrawer), 让工具按钮能实时判断上限
       registerDrawingCounts?.(counts);
     };
     refreshDrawingCounts();
@@ -194,17 +196,14 @@ export function useChartInit(deps: UseChartInitDeps): UseChartInitApi {
       // 横屏全屏时也按手机布局处理 (主图 2x 拉伸 + 触摸手势门控)。
       const isPhoneLayout = mobileRef.current || fullscreenRef.current;
       const toolActive = drawingMgrRef.current?.getActiveTool() !== TOOL.NONE;
-      // 2026-07-21 18:28:13：手机 iframe 中纵向手势交给页面滚动，图表继续处理横向拖动。
-      // 2026-08-03：工具激活时禁用触摸平移 (horzTouchDrag=false), 否则手指拖动会平移图表而非绘图。
+      // 2026-09-10：handleScroll 公式收敛到 utils/chartOptions.buildHandleScroll —
+      // 原此处的内联版缺 drawMode 判断, 与 ChartPanel.applyTouchPanOptions 语义漂移
+      // (移动画线模式下工具激活时, 此处禁用横向拖动、工具切换路径允许)。统一后此处
+      // 也感知 mobileDrawModeRef, 行为与工具切换路径一致。
       chart.applyOptions({
         width: containerRef.current.clientWidth,
         height: containerRef.current.clientHeight,
-        handleScroll: {
-          mouseWheel: !isPhoneLayout,
-          pressedMouseMove: true,
-          horzTouchDrag: isPhoneLayout ? !toolActive : true,
-          vertTouchDrag: !isPhoneLayout,
-        },
+        handleScroll: buildHandleScroll(isPhoneLayout, toolActive, mobileDrawModeRef.current),
       });
       // 2026-08-04：全屏时容器尺寸变化会触发本 resize, 若此处直接 applyPaneLayout
       // 会把副图 stretchFactor 重新设回 1, 覆盖全屏隐藏 — 统一走 syncPaneLayout。
@@ -240,9 +239,7 @@ export function useChartInit(deps: UseChartInitDeps): UseChartInitApi {
       paneSeriesMapRef.current = new Map();
       barsRef.current = [];
       setTextBoxes([]);
-      setSelectedTextBox(null);
-      setEditingTextBox(null);
-      delete (window as any).__chartZoom;
+      setTextBoxSel(null);
       // 2026-08-05：清理触屏切换标志, 避免卸载残留污染下次挂载后的设置面板操作
       delete (window as any).__mobileLowerTap;
     };
@@ -289,8 +286,44 @@ export function useChartInit(deps: UseChartInitDeps): UseChartInitApi {
     return { time: bar.time as Time, open: bar.o, high: bar.h, low: bar.l, close: bar.c };
   };
 
+  // 2026-08-04：默认放大程度 — 目标蜡烛宽度约 8px, 移动/PC 观感一致:
+  // 移动端竖屏约 50 根/屏, PC 端按容器宽度自适应 (1280px 约 160 根, 比全量 300 根放大近一倍)。
+  // 2026-09-08：常量化 (TARGET_BAR_SPACING / MOBILE_MIN_VISIBLE_BARS / PC_MIN_VISIBLE_BARS) 已抽到 constants/chart.ts
+
+  // 2026-09-10：useCallback 稳定化 — 三个函数此前是裸声明, 每次 render 新引用,
+  // 污染下游 useOverlayIndicator/useLowerPanes 的 useCallback 依赖链
+  // (最终导致 ChartPanel 数据加载 effect 无限重跑)。函数体只读 refs
+  // (render 期已由调用方同步最新值), 故依赖数组仅需 refs / palette。
+  // 声明顺序: fitTimeScaleDefault 必须先于 renderMainSeries (后者 deps 引用它)。
+
+  // 统一的时间轴默认范围入口 — 替换所有裸 fitContent 调用点 (主图/副图加载/删除后),
+  // 避免副图加载后的 fitContent 覆盖主图已设置的默认放大范围。
+  const fitTimeScaleDefault = useCallback(() => {
+    const chart = chartRef.current;
+    if (!chart) return;
+    const ts = chart.timeScale();
+    const minBars = mobileRef.current ? MOBILE_MIN_VISIBLE_BARS : PC_MIN_VISIBLE_BARS;
+    const bars = barsRef.current;
+    const width = containerRef.current?.clientWidth ?? 0;
+    const count = Math.max(minBars, Math.round(width / TARGET_BAR_SPACING));
+    ts.setVisibleLogicalRange({
+      from: Math.max(0, bars.length - count),
+      to: bars.length + 2,
+    });
+  }, [chartRef, mobileRef, barsRef, containerRef]);
+
+  const syncPaneLayout = useCallback(() => {
+    const chart = chartRef.current;
+    if (!chart) return;
+    // 2026-07-21 18:28:13：手机主图保持双倍权重，桌面继续使用原有等比例 pane 布局。
+    // 2026-08-04：按设备类型判断手机布局 (横屏全屏也按手机布局处理)。
+    // 2026-08-05：主图权重统一 2 (PC 2:1); 全屏隐藏副图由 hideLowerPanesForFullscreen
+    // 移除 pane 实现 (库对 pane 高度有硬性 2px 下限, setStretchFactor(0) 只能压成细缝)。
+    applyPaneLayout(chart);
+  }, [chartRef]);
+
   // ---- 渲染主图序列 ----
-  const renderMainSeries = (bars: Bar[], chartType: number, decimals: number) => {
+  const renderMainSeries = useCallback((bars: Bar[], chartType: number, decimals: number) => {
     const chart = chartRef.current!;
     // 2026-07-31：先清理上一轮可能存在的 volume overlay series（HMR / 切换 chartType 路径）
     if (volumeSeriesRef.current) {
@@ -433,41 +466,12 @@ export function useChartInit(deps: UseChartInitDeps): UseChartInitApi {
     // 数据完成首次 auto-scale 后再触发布局, 避免 primitive 在 priceToCoordinate
     // 返回画布几何中心时被绘制,造成"红点全在水平线"的视觉异常。
     requestAnimationFrame(fitTimeScaleDefault);
-  };
+  }, [chartRef, mainSeriesRef, oldMainSeriesRef, volumeSeriesRef, prosticksPrimRef,
+      drawingMgrRef, palette, fitTimeScaleDefault]);
 
   // 2026-07-21 22:47:36：toMainSeriesPoint 暴露给 useRealtimeData 使用
   // 2026-09-08：renderMainSeries 已包含实时逻辑，toMainSeriesPoint 仍需单独导出给 handleRealtimeBar
   void toMainSeriesPoint;
-
-  // 2026-08-04：默认放大程度 — 目标蜡烛宽度约 8px, 移动/PC 观感一致:
-  // 移动端竖屏约 50 根/屏, PC 端按容器宽度自适应 (1280px 约 160 根, 比全量 300 根放大近一倍)。
-  // 2026-09-08：常量化 (TARGET_BAR_SPACING / MOBILE_MIN_VISIBLE_BARS / PC_MIN_VISIBLE_BARS) 已抽到 constants/chart.ts
-
-  // 统一的时间轴默认范围入口 — 替换所有裸 fitContent 调用点 (主图/副图加载/删除后),
-  // 避免副图加载后的 fitContent 覆盖主图已设置的默认放大范围。
-  const fitTimeScaleDefault = () => {
-    const chart = chartRef.current;
-    if (!chart) return;
-    const ts = chart.timeScale();
-    const minBars = mobileRef.current ? MOBILE_MIN_VISIBLE_BARS : PC_MIN_VISIBLE_BARS;
-    const bars = barsRef.current;
-    const width = containerRef.current?.clientWidth ?? 0;
-    const count = Math.max(minBars, Math.round(width / TARGET_BAR_SPACING));
-    ts.setVisibleLogicalRange({
-      from: Math.max(0, bars.length - count),
-      to: bars.length + 2,
-    });
-  };
-
-  const syncPaneLayout = () => {
-    const chart = chartRef.current;
-    if (!chart) return;
-    // 2026-07-21 18:28:13：手机主图保持双倍权重，桌面继续使用原有等比例 pane 布局。
-    // 2026-08-04：按设备类型判断手机布局 (横屏全屏也按手机布局处理)。
-    // 2026-08-05：主图权重统一 2 (PC 2:1); 全屏隐藏副图由 hideLowerPanesForFullscreen
-    // 移除 pane 实现 (库对 pane 高度有硬性 2px 下限, setStretchFactor(0) 只能压成细缝)。
-    applyPaneLayout(chart);
-  };
 
   return { renderMainSeries, fitTimeScaleDefault, syncPaneLayout };
 }

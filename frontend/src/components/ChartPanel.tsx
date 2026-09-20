@@ -1,35 +1,39 @@
-import { useEffect, useRef, useState, useCallback, useMemo, type CSSProperties, type PointerEvent as ReactPointerEvent } from 'react';
+import { useEffect, useRef, useState, useCallback, useMemo, memo, type CSSProperties, type PointerEvent as ReactPointerEvent } from 'react';
 import { type IChartApi, type ISeriesApi, type Time, type MouseEventParams, type Coordinate } from 'lightweight-charts';
 import { message } from 'antd';
 import { marketApi } from '../api/client';
-import type { Bar, ChartPanelProps, IndicatorResult } from '../types';
+import { UPPER_TECH, type Bar, type ChartPanelProps, type IndicatorResult } from '../types';
 import { INITIAL_LOADING_MIN_MS } from '../constants/chart';
 import { LONG_PRESS_MS, LOWER_TAP_THRESHOLD } from '../constants/chart';
-import { ProsticksPrimitive } from '../primitives/ProsticksPrimitive';
-import { IchimokuPrimitive } from '../primitives/IchimokuPrimitive';
-import { DrawingManager } from '../drawing/DrawingManager';
+import type { ProsticksPrimitive } from '../hooks/primitives/ProsticksPrimitive';
+import type { IchimokuPrimitive } from '../hooks/primitives/IchimokuPrimitive';
+import type { DrawingManager } from '../drawing/DrawingManager';
 import { TOOL, LIMITED_TOOLS, MAX_PER_TYPE } from '../drawing/tools';
+import { buildHandleScroll } from '../utils/chartOptions';
 import { useI18n } from '../i18n';
-import TextBoxLayer, { type TextBoxEntry } from './TextBoxLayer';
-import { useChartDrawInteraction } from '../hooks/useChartDrawInteraction';
-import { MobileDrawOverlays } from '../mobile/MobileDrawOverlays';
+import TextBoxLayer, { type TextBoxEntry, type TextBoxSel } from './TextBoxLayer';
 import { InfoOverlay } from './overlays/InfoOverlay';
 import { ToolsHintOverlay } from './overlays/ToolsHintOverlay';
 import { LoadingOverlay } from './overlays/LoadingOverlay';
 import { EmptyOverlay } from './overlays/EmptyOverlay';
 import { PaneTitleOverlay } from './overlays/PaneTitleOverlay';
 import { PaneSkeletonOverlay } from './overlays/PaneSkeletonOverlay';
-// Phase 2 hooks (2026-09-08)
-import { useChartInit } from '../hooks/useChartInit';
-import { useRealtimeData } from '../hooks/useRealtimeData';
-import { useOverlayIndicator } from '../hooks/useOverlayIndicator';
-import { useLowerPanes } from '../hooks/useLowerPanes';
-// PR3: 命令总线 hook (2026-09-08)
-import { useChartCommandBus } from '../hooks/useChartCommandBus';
+// Phase 2 hooks + PR3 命令总线 hook (2026-09-08)，统一从 hooks 出口导入
+import {
+  useChartCommandBus,
+  useChartDrawInteraction,
+  useChartInit,
+  useLowerPanes,
+  useOverlayIndicator,
+  useRealtimeData,
+} from '../hooks';
+import { MobileDrawOverlays } from '../mobile/MobileDrawOverlays';
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
-export default function ChartPanel(props: ChartPanelProps) {
+// 2026-09-10：包 memo — props 均为原始值/稳定回调（App 侧 useCallback），父级无关
+// 重渲染（如 lang 切换以外的 state 变化）不再穿透到图表树。
+function ChartPanel(props: ChartPanelProps) {
   // ===== refs =====
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
@@ -41,9 +45,9 @@ export default function ChartPanel(props: ChartPanelProps) {
   const prosticksPrimRef = useRef<ProsticksPrimitive | null>(null);
   const ichimokuPrimRef = useRef<IchimokuPrimitive | null>(null);
   const drawingMgrRef = useRef<DrawingManager | null>(null);
-  // 2026-09-09：保留三个独立 ref（hook 类型契约要求 MutableRefObject<boolean>），
-  // 但用 useLayoutMode() 集中函数 + 单一赋值点同步它们，避免各处重复写 3 行赋值代码。
-  // 见 hooks/utils/refs.ts 中的 useLayoutMode 工具（如未来要内化到 hooks 内部可扩展）。
+  // 2026-09-09：保留三个独立 ref（hook 类型契约要求 MutableRefObject<boolean>）。
+  // render 阶段集中写一次 .current，确保各 hook 在事件/effect 闭包中读到最新值。
+  // （注：原先注释提到的 hooks/utils/refs.ts useLayoutMode 工具从未实现，已修正。）
   const fullscreenRef = useRef(props.fullscreen === true);
   const mobileRef = useRef(props.mobile === true);
   const mobileDrawModeRef = useRef(props.mobileDrawMode === true);
@@ -78,21 +82,21 @@ export default function ChartPanel(props: ChartPanelProps) {
   const lastTouchPointRef = useRef<{ clientX: number; clientY: number } | null>(null);
 
   // ===== React state =====
-  const [initialLoading, setInitialLoading] = useState(true);
-  // 2026-09-04：主图数据状态机 — 'loading' 期间与 initialLoading 共用 Spin 覆盖层,
-  // 'empty' (成功但 bars 为空) / 'error' (请求失败) 时显示全屏占位 + 刷新按钮,
-  // 'idle' 表示数据已就绪不显示任何覆盖层
-  const [mainDataState, setMainDataState] = useState<'loading' | 'empty' | 'error' | 'idle'>('loading');
+  // 2026-09-10：主图数据状态机（原 initialLoading + mainDataState 两 state 合并 —
+  // 语义重叠，initialLoading ≈ 首次加载中，两条 state 描述同一条状态机且需双写同步）。
+  // 'initial-loading' 仅首次挂载（全屏 Spin 覆盖层）；'loading' 切换品种时不再遮挡旧图；
+  // 'empty' (成功但 bars 为空) / 'error' (请求失败) 显示全屏占位 + 刷新按钮；
+  // 'idle' 数据已就绪不显示任何覆盖层。
+  const [mainDataState, setMainDataState] = useState<'initial-loading' | 'loading' | 'empty' | 'error' | 'idle'>('initial-loading');
   const [info, setInfo] = useState<string>('');
-  const [toolHint, setToolHint] = useState<string>('');
   // 2026-07-27：文字框 React state — 与 DrawingManager 双向同步，由订阅回调驱动
   // 2026-08-05：改存 {box, index}（index 为 DrawingManager.objects 下标），
   // 与 addTextBox/updateTextBox/deleteTextBox/moveTextBox 的入参统一。
   const [textBoxes, setTextBoxes] = useState<TextBoxEntry[]>([]);
-  const [selectedTextBox, setSelectedTextBox] = useState<number | null>(null);
-  const [editingTextBox, setEditingTextBox] = useState<number | null>(null);
-  // 2026-09-07：每类工具对象数量 — key 为 TOOL.* 数值, value 为当前数量。
-  const [drawingCounts, setDrawingCounts] = useState<Record<number, number>>({});
+  // 2026-09-10：合并原 selectedTextBox/editingTextBox 两 state — 所有写入点均成对 set,
+  // editing 必然隐含 selected, 不存在"编辑中未选中"的合法组合 (TextBoxLayer 的
+  // selectedIndex/editingIndex props 由该值派生)。
+  const [textBoxSel, setTextBoxSel] = useState<TextBoxSel>(null);
   // 2026-09-09：合并 paneTops + paneRects — 原本两次遍历 panes.getBoundingClientRect() 浪费一次 layout，
   // 现在仅维护一份 Array<{top, height}>，top 通过 layout.top 直接读取。
   // 用途: 浮层定位 + 点击副图循环切换指标 + 触屏坐标→主图坐标系归一化。
@@ -108,8 +112,7 @@ export default function ChartPanel(props: ChartPanelProps) {
     updateInfoOverlayRef, handleChartClickRef,
     mobile: props.mobile === true,
     palette: props.palette,
-    setTextBoxes, setSelectedTextBox, setEditingTextBox,
-    setDrawingCounts,
+    setTextBoxes, setTextBoxSel,
     registerDrawingCounts: props.registerDrawingCounts,
     onToolChange: props.onToolChange,
   });
@@ -141,23 +144,22 @@ export default function ChartPanel(props: ChartPanelProps) {
     upperParams: props.upperParams,
     upper: props.upper,
     decimals: props.decimals,
-    refreshAllRef,
     onRemoveLower: props.onRemoveLower,
     panesHiddenForFullscreenRef,
   });
 
   const {
     lowerLoadingStates, lowerErrorStates, lowerValues, pendingFadingOut,
-    refreshLowerValues, updatePaneTops: updatePaneTopsFromHook,
-    removeLowerPaneImmediate, resetLowerPaneImmediate, moveLower: moveLowerFromHook,
+    refreshLowerValues,
+    resetLowerPaneImmediate, moveLower: moveLowerFromHook,
     hideLowerPanesForFullscreen, restoreLowerPanesFromCache,
     loadLowerIndicatorsFull,
   } = lowerPaneApi;
 
-  // 包装 updatePaneTops：既调 hook 内部逻辑，也同步 ChartPanel 顶层的 paneLayouts state
-  // 2026-09-09：单次遍历 panes，仅一次 setPaneLayouts（原先两次遍历 + 两次 setState）
+  // 2026-09-09：单次遍历 panes，仅一次 setPaneLayouts（原先两次遍历 + 两次 setState）。
+  // 2026-09-10：useLowerPanes 内部的 updatePaneTops 已移除（死写入），浮层定位
+  // 全部由本组件的 paneLayouts + 下方 ResizeObserver 路径负责。
   const updatePaneTops = useCallback(() => {
-    updatePaneTopsFromHook();
     const chart = chartRef.current;
     const container = containerRef.current;
     if (!chart || !container) return;
@@ -171,11 +173,11 @@ export default function ChartPanel(props: ChartPanelProps) {
         return { top: rect.top - containerRect.top, height: rect.height };
       }),
     );
-  }, [updatePaneTopsFromHook]);
+  }, []);
 
-  // 2026-09-08：useCanvasCrosshair 抽离后未接入 — pointer 路由与画线/副图 cycle 强耦合
-  // 跨 hook 边界传递 lowerTapStartRef 复杂度反而上升, 暂保留 ChartPanel 顶层实现。
-  // 见 hooks/useCanvasCrosshair.ts 中的 TODO 注释。
+  // 2026-09-08：曾尝试把长按十字线抽到 useCanvasCrosshair — 因 pointer 路由与画线/
+  // 副图 cycle 强耦合、跨 hook 传递 lowerTapStartRef 复杂度反而上升而放弃。
+  // 2026-09-10：该未接线文件已删除，长按十字线保留在本组件顶层实现。
 
   // ===== Hook #2: 实时数据（订阅放最后，依赖 loadOverlayIndicator）=====
 
@@ -194,20 +196,18 @@ export default function ChartPanel(props: ChartPanelProps) {
 
   // ===== 触摸平移选项 =====
   // 2026-09-01：移动端画线交互 hook — tap 定点 / 选中已画对象 / 步骤提示 / 完成提示。
+  // 2026-09-10：handleScroll 公式收敛到 utils/chartOptions.buildHandleScroll，
+  // 与 useChartInit 的 resize 路径共用同一份 drawMode 感知公式（原先两处漂移）。
   const applyTouchPanOptions = useCallback(() => {
     const chart = chartRef.current;
     const c = containerRef.current;
     if (!chart || !c) return;
-    const isPhoneLayout = mobileRef.current || fullscreenRef.current;
-    const toolActive = drawingMgrRef.current?.getActiveTool() !== TOOL.NONE;
-    const drawMode = mobileDrawModeRef.current;
     chart.applyOptions({
-      handleScroll: {
-        mouseWheel: !isPhoneLayout,
-        pressedMouseMove: true,
-        horzTouchDrag: isPhoneLayout ? !(toolActive && !drawMode) : true,
-        vertTouchDrag: !isPhoneLayout,
-      },
+      handleScroll: buildHandleScroll(
+        mobileRef.current || fullscreenRef.current,
+        drawingMgrRef.current?.getActiveTool() !== TOOL.NONE,
+        mobileDrawModeRef.current,
+      ),
     });
   }, []);
 
@@ -231,14 +231,12 @@ export default function ChartPanel(props: ChartPanelProps) {
     onDrawDone: () => { /* 'done' 提示由 hook 内置 2s 自动消失, 无需外层 message */ },
     onAnchorDragPan: handleAnchorDragPan,
     onTextBoxCreated: (idx) => {
-      setSelectedTextBox(idx);
-      setEditingTextBox(idx);
+      setTextBoxSel({ idx, editing: true });
     },
     onTextBoxSelected: (idx) => {
-      setSelectedTextBox(idx);
-      if (editingTextBox !== null && editingTextBox !== idx) {
-        setEditingTextBox(null);
-      }
+      // idx 为 null 时整体清空; 选中正在编辑的文字框时保持编辑态, 其他情况仅选中不编辑
+      if (idx === null) { setTextBoxSel(null); return; }
+      setTextBoxSel((prev) => (prev?.editing && prev.idx === idx ? prev : { idx, editing: false }));
     },
   });
 
@@ -250,7 +248,7 @@ export default function ChartPanel(props: ChartPanelProps) {
     if (!chart) return;
     const myToken = ++loadTokenRef.current;
     const isFirstLoad = !initialLoadedRef.current;
-    setMainDataState('loading');
+    setMainDataState(isFirstLoad ? 'initial-loading' : 'loading');
     try {
       const bars = await Promise.all([
         marketApi.getBars(props.code, props.interval, 300, false),
@@ -280,21 +278,27 @@ export default function ChartPanel(props: ChartPanelProps) {
       message.error(t('LoadFailed'));
       setMainDataState('error');
     } finally {
-      if (isFirstLoad && !initialLoadedRef.current) {
-        initialLoadedRef.current = true;
-        setInitialLoading(false);
-      }
+      // 2026-09-10：合并 initialLoading 后不再在此 setState — 终态已由 try/catch
+      // 分支设置; token 失配早退路径本就不该写状态 (旧实现 finally 无条件置
+      // initialLoading=false, 竞态下会短暂露出旧图再被新请求覆盖)。
+      if (isFirstLoad) initialLoadedRef.current = true;
     }
-    // 2026-09-09：补全 deps — 原数组缺 lowerParams / t / renderMainSeries / loadOverlayIndicator /
-    // loadLowerIndicatorsFull / setMainDataState / setInitialLoading，且 props.decimals 重复一次（typo）。
-    // 现全部显式列出，移除 eslint-disable 注释。
   }, [props.code, props.interval, props.decimals, props.chartType,
       props.upper, props.upperParams, props.lower, props.lowerParams,
-      t, renderMainSeries, loadOverlayIndicator, loadLowerIndicatorsFull,
-      setMainDataState, setInitialLoading]);
+      t, renderMainSeries, loadOverlayIndicator, loadLowerIndicatorsFull]);
+
+  // 2026-09-10（关键修复）：触发依赖收敛回 [code, interval, decimals] — 恢复拆 hook 前
+  // 的分层语义。上一版把 loadMainData 整个放进 deps，而其中的 renderMainSeries 等
+  // 当时是每次 render 新引用的裸函数，导致任何 state 变化（十字线 setInfo、副图 loading
+  // 等）→ effect 重跑 → 重新 getBars + 重建 series + 重置缩放 → 再 setState → 无限循环。
+  // upper/lower/params/chartType 各有专属精确 effect（叠加指标 [upper]、副图 [lower]、
+  // 参数 [upperParams/lowerParams]、类型切换 [chartType]），全量重载反而破坏副图
+  // "精细增删不闪烁"的设计。现 loadMainData 依赖链已 useCallback 稳定化，但触发点
+  // 仍保持最小集。
   useEffect(() => {
     void loadMainData();
-  }, [loadMainData]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [props.code, props.interval, props.decimals]);
 
   const retryLoad = useCallback(() => {
     void loadMainData();
@@ -304,7 +308,7 @@ export default function ChartPanel(props: ChartPanelProps) {
   useEffect(() => {
     if (!chartRef.current || barsRef.current.length === 0) return;
     renderMainSeries(barsRef.current, props.chartType, props.decimals);
-    if (props.upper === 5 /* UPPER_TECH.IKH */) {
+    if (props.upper === UPPER_TECH.IKH) {
       void loadOverlayIndicator(props.upper, props.code, props.interval, props.upperParams);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -338,34 +342,44 @@ export default function ChartPanel(props: ChartPanelProps) {
 
     return () => {
       ro.disconnect();
+      // 2026-09-10：补漏 — 原先只 disconnect ResizeObserver，timeScale 订阅从未退订，
+      // 副图数量每次变化都会泄漏一个持有旧 chart 引用的监听器。
+      ts.unsubscribeVisibleTimeRangeChange(updatePositions);
       window.removeEventListener('resize', onResize);
     };
   }, [props.lower.length, updatePaneTops]);
 
   // ===== 绘图工具切换 =====
   useEffect(() => {
-    if (LIMITED_TOOLS.has(props.tool) && (drawingCounts[props.tool] ?? 0) >= MAX_PER_TYPE) {
-      message.warning(t('LimitReached'));
-      props.onToolChange(TOOL.NONE);
-      return;
+    // 2026-09-10：上限预检改为直接数真值源 mgr.objects（原 drawingCounts state 镜像
+    // 可能滞后一个 tick — 订阅回调 setState 异步, 点击瞬间读到旧值）。
+    if (LIMITED_TOOLS.has(props.tool)) {
+      const count = drawingMgrRef.current?.objects.filter((o) => o.type === props.tool).length ?? 0;
+      if (count >= MAX_PER_TYPE) {
+        message.warning(t('LimitReached'));
+        props.onToolChange(TOOL.NONE);
+        return;
+      }
     }
     drawingMgrRef.current?.setTool(props.tool);
-    updateToolHint(props.tool);
     if (props.tool !== TOOL.NONE) chartRef.current?.clearCrosshairPosition();
     applyTouchPanOptions();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [props.tool, props.mobileDrawMode]);
 
   // ===== 画线全局显隐 =====
-  useEffect(() => {
-    drawingMgrRef.current?.setVisible(props.drawingsVisible !== false);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [props.drawingsVisible]);
-
+  // 2026-09-10：合并原两个 effect（setVisible + 隐藏时清选中）— 同一 prop 驱动的
+  // 两个连续 effect，分开写导致两次 effect 调度且语义割裂。
   const clearDrawSelection = drawInteraction.clearSelection;
   useEffect(() => {
-    if (props.drawingsVisible === false) {
+    const visible = props.drawingsVisible !== false;
+    drawingMgrRef.current?.setVisible(visible);
+    if (!visible) {
       clearDrawSelection();
+      // 2026-09-11：文字框选中态也一并清 — mgr.setVisible 已把 TextBox 标记 hidden
+      // 并清 mgr.selected，但 React 侧 textBoxSel（驱动删除 FAB / 编辑态）需在此同步，
+      // 防止 FAB 悬空或编辑态残留。
+      setTextBoxSel(null);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [props.drawingsVisible, clearDrawSelection]);
@@ -384,7 +398,7 @@ export default function ChartPanel(props: ChartPanelProps) {
   useEffect(() => {
     props.registerExport(() => {
       if (chartRef.current) {
-        chartRef.current.takeScreenshot().toDataURL('image/png');
+        // 2026-09-10：原实现调用两次 toDataURL（第一次结果被丢弃）— 截图同步转 base64 开销不小，改单次。
         const url = chartRef.current.takeScreenshot().toDataURL('image/png');
         const a = document.createElement('a');
         a.href = url;
@@ -525,8 +539,7 @@ export default function ChartPanel(props: ChartPanelProps) {
         props.onToolChange(TOOL.NONE);
         return;
       }
-      setSelectedTextBox(idx);
-      setEditingTextBox(idx);
+      setTextBoxSel({ idx, editing: true });
       mgr.setTool(TOOL.NONE);
       props.onToolChange(TOOL.NONE);
     } else {
@@ -550,15 +563,20 @@ export default function ChartPanel(props: ChartPanelProps) {
   handleChartClickRef.current = handleChartClick;
 
   // ===== 工具提示 =====
-  const updateToolHint = (tool: number) => {
+  // 2026-09-10：原 toolHint state + updateToolHint 手动同步改为 useMemo 派生 —
+  // 提示是 tool/mobile/t 的纯函数, 无独立状态语义。附带修复: 语言切换时提示即时跟随
+  // (原实现停留在激活工具那一刻的语言)。i18n 化: 原 `${'points'}` 伪调用 (key 不存在,
+  // 硬编码英文) 与硬编码中文括号提示改为 Points/ChannelHint key。
+  const toolHint = useMemo(() => {
     const cancelHint = props.mobile ? '' : ` · ${t('RightClickCancel')}`;
-    if (tool === TOOL.TRENDLINE) setToolHint(`${t('DrawLine')}: ${t('chart')} → 2 ${'points'}${cancelHint}`);
-    else if (tool === TOOL.PARALLEL_LINE) setToolHint(`${t('ParallelLines')}: 3 ${'points'}${cancelHint}`);
-    else if (tool === TOOL.PARALLEL_CHANNEL) setToolHint(`${t('ParallelChannel')}: 3 ${'points'} (左下 → 左上 → 右上)${cancelHint}`);
-    else if (tool === TOOL.FIBON_RET) setToolHint(`${t('FibRetracement')}: 2 ${'points'}${cancelHint}`);
-    else if (tool === TOOL.FIBON_PRO) setToolHint(`${t('FibProjection')}: 3 ${'points'}${cancelHint}`);
-    else setToolHint('');
-  };
+    if (props.tool === TOOL.TRENDLINE) return `${t('DrawLine')}: ${t('chart')} → 2 ${t('Points')}${cancelHint}`;
+    if (props.tool === TOOL.PARALLEL_LINE) return `${t('ParallelLines')}: 3 ${t('Points')}${cancelHint}`;
+    if (props.tool === TOOL.PARALLEL_CHANNEL) return `${t('ParallelChannel')}: 3 ${t('Points')} ${t('ChannelHint')}${cancelHint}`;
+    if (props.tool === TOOL.FIBON_RET) return `${t('FibRetracement')}: 2 ${t('Points')}${cancelHint}`;
+    if (props.tool === TOOL.FIBON_PRO) return `${t('FibProjection')}: 3 ${t('Points')}${cancelHint}`;
+    return '';
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [props.tool, props.mobile, t]);
 
   // ===== 缩放/平移 (暴露给 App) =====
   const zoomOut = useCallback(() => {
@@ -610,14 +628,13 @@ export default function ChartPanel(props: ChartPanelProps) {
   const handlePaneMoveUp = useCallback((tech: number) => handleMoveLower(tech, -1), [handleMoveLower]);
 
   const handleTextBoxSelect = useCallback((idx: number | null) => {
-    setSelectedTextBox(idx);
+    setTextBoxSel(idx === null ? null : { idx, editing: false });
   }, []);
 
   const handleTextBoxRequestEdit = useCallback((idx: number) => {
     // 2026-09-01：移动端非画线模式下禁止进入编辑（避免与触屏手势冲突）
     if (props.mobile && props.mobileDrawMode !== true) return;
-    setSelectedTextBox(idx);
-    setEditingTextBox(idx);
+    setTextBoxSel({ idx, editing: true });
   }, [props.mobile, props.mobileDrawMode]);
 
   const handleTextBoxCommit = useCallback((idx: number, text: string) => {
@@ -625,11 +642,12 @@ export default function ChartPanel(props: ChartPanelProps) {
     if (!mgr) return;
     if (text === '') {
       mgr.deleteTextBox(idx);
-      setSelectedTextBox(null);
+      setTextBoxSel(null);
     } else {
       mgr.updateTextBox(idx, text);
+      // 提交后保持选中、退出编辑
+      setTextBoxSel((prev) => (prev?.idx === idx ? { idx, editing: false } : prev));
     }
-    setEditingTextBox(null);
   }, []);
 
   const handleTextBoxMove = useCallback((idx: number, time: Time, price: number) => {
@@ -640,33 +658,46 @@ export default function ChartPanel(props: ChartPanelProps) {
 
   const handleContainerClick = useCallback(() => {
     // 点击空白处取消选中文字框（编辑中除外）
-    if (selectedTextBox !== null && editingTextBox === null) {
-      setSelectedTextBox(null);
+    if (textBoxSel !== null && !textBoxSel.editing) {
+      setTextBoxSel(null);
     }
-  }, [selectedTextBox, editingTextBox]);
+  }, [textBoxSel]);
 
-  // ===== 通过 ref 暴露缩放/平移给 App =====
+  // 2026-09-10：移动端画线模式悬浮删除按钮 — 从 JSX 内 IIFE 收敛而来,
+  // onDelete 用 useCallback 稳定引用（hasTextBoxSel 语义在内部重判，不进 deps 之外的闭包陷阱）。
+  const handleMobileDeleteSelected = useCallback(() => {
+    if (textBoxSel !== null && !textBoxSel.editing) {
+      drawingMgrRef.current?.deleteTextBox(textBoxSel.idx);
+      setTextBoxSel(null);
+      return;
+    }
+    drawInteraction.deleteSelected();
+  }, [textBoxSel, drawInteraction]);
+
+  // ===== 缩放/平移 (暴露给 App) =====
+  // 2026-09-10：原 window.__chartZoom 全局变量迁移为 registerZoom prop 注册模式
+  // (与 registerExport/registerRefresh 同风格)。四函数均 useCallback([]) 稳定且
+  // 只读 chartRef.current, 挂载时注册一次即可, 无需 cleanup。
   useEffect(() => {
-    (window as any).__chartZoom = { zoomOut, zoomIn, shiftLeft, shiftRight };
-    return () => { delete (window as any).__chartZoom; };
-  }, [zoomOut, zoomIn, shiftLeft, shiftRight]);
+    props.registerZoom?.({ zoomOut, zoomIn, shiftLeft, shiftRight });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // ===== 全局键盘监听 — Delete 键删除选中文字框 =====
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (selectedTextBox === null) return;
-      if (editingTextBox !== null) return;
+      if (textBoxSel === null || textBoxSel.editing) return;
       const ae = document.activeElement as HTMLElement | null;
       if (ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA' || ae.isContentEditable)) return;
       if (e.key === 'Delete' || e.key === 'Backspace') {
-        drawingMgrRef.current?.deleteTextBox(selectedTextBox);
-        setSelectedTextBox(null);
+        drawingMgrRef.current?.deleteTextBox(textBoxSel.idx);
+        setTextBoxSel(null);
         e.preventDefault();
       }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [selectedTextBox, editingTextBox]);
+  }, [textBoxSel]);
 
   // ===== 涨跌 CSS 变量注入 =====
   // 2026-09-09：useMemo 避免每次 render 创建新对象触发 inline style diff
@@ -699,10 +730,9 @@ export default function ChartPanel(props: ChartPanelProps) {
   const lowerTapStartRef = useRef<{ x: number; y: number; pointerId: number } | null>(null);
   const longPressTimerRef = useRef<number | null>(null);
   const longPressActiveRef = useRef(false);
-  // 2026-09-08: lastTouchPointRef 抽到 useCanvasCrosshair 后由 hook 内部维护, 此处保留 ChartPanel
-  // 自己的本地引用用于 onChartPointerMove 的拖动距离判断 (与 hook 内部状态机并行)。
-  // 简化: 实际只有 longPressActiveRef.current 决定十字光标是否显示, lastTouchPointRef
-  // 由 hook 内部 rAF 回调消费, 此处不再需要。
+  // 2026-09-08: lastTouchPointRef 由本组件自行维护 — 实际只有 longPressActiveRef.current
+  // 决定十字光标是否显示, lastTouchPointRef 在 rAF 回调中消费。
+  // 简化: 此处只需维护引用本身, 无需与任何外部 hook 同步。
 
   const renderCrosshairFromLastPoint = () => {
     crosshairRafRef.current = null;
@@ -936,50 +966,40 @@ export default function ChartPanel(props: ChartPanelProps) {
         chart={chartRef.current}
         series={mainSeriesRef.current}
         textBoxes={textBoxes}
-        selectedIndex={selectedTextBox}
-        editingIndex={editingTextBox}
+        selectedIndex={textBoxSel?.idx ?? null}
+        editingIndex={textBoxSel?.editing ? textBoxSel.idx : null}
         placeholder={t('TextBoxPlaceholder')}
         onSelect={handleTextBoxSelect}
         onRequestEdit={handleTextBoxRequestEdit}
         onCommit={handleTextBoxCommit}
         onMove={handleTextBoxMove}
-        visible={props.drawingsVisible !== false}
       />
-      {props.mobileDrawMode === true && (() => {
-        const sel = drawInteraction.selected;
-        const selObj = sel !== null ? drawingMgrRef.current?.objects[sel] : undefined;
-        const toolIdle = props.tool === TOOL.NONE;
-        const hasDrawingSel = toolIdle
-          && sel !== null && selObj !== undefined && !selObj.hidden;
-        const hasTextBoxSel = toolIdle
-          && selectedTextBox !== null && editingTextBox === null;
-        const hasSelected = hasDrawingSel || hasTextBoxSel;
-        const onDelete = hasTextBoxSel
-          ? () => {
-              if (selectedTextBox !== null) {
-                drawingMgrRef.current?.deleteTextBox(selectedTextBox);
-                setSelectedTextBox(null);
-              }
-            }
-          : drawInteraction.deleteSelected;
-        return (
-          <MobileDrawOverlays
-            stepHint={drawInteraction.stepHint}
-            hasSelected={hasSelected}
-            onDeleteSelected={onDelete}
-          />
-        );
-      })()}
-      <LoadingOverlay show={initialLoading} />
+      {props.mobileDrawMode === true && (
+        (() => {
+          // 2026-09-10：仅保留纯展示派生值的内联计算（不创建新函数引用）
+          const sel = drawInteraction.selected;
+          const selObj = sel !== null ? drawingMgrRef.current?.objects[sel] : undefined;
+          const toolIdle = props.tool === TOOL.NONE;
+          const hasDrawingSel = toolIdle
+            && sel !== null && selObj !== undefined && !selObj.hidden;
+          const hasTextBoxSel = toolIdle
+            && textBoxSel !== null && !textBoxSel.editing;
+          return (
+            <MobileDrawOverlays
+              stepHint={drawInteraction.stepHint}
+              hasSelected={hasDrawingSel || hasTextBoxSel}
+              onDeleteSelected={handleMobileDeleteSelected}
+            />
+          );
+        })()
+      )}
+      <LoadingOverlay show={mainDataState === 'initial-loading'} />
       <EmptyOverlay
-        show={(mainDataState === 'empty' || mainDataState === 'error') && !initialLoading}
+        show={mainDataState === 'empty' || mainDataState === 'error'}
         onRetry={retryLoad}
       />
     </div>
   );
 }
 
-// 防止 TS6133 警告 — 这些仅作为类型/Ref 类型注解使用，运行时不需要
-void ProsticksPrimitive;
-void IchimokuPrimitive;
-void DrawingManager;
+export default memo(ChartPanel);

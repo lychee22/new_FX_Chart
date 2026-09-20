@@ -1,3 +1,5 @@
+// 2026-09-10：memo 化 — onRetry 已由 ChartPanel useCallback 稳定。
+import { memo } from 'react';
 import { Button } from 'antd';
 import { RedoOutlined } from '@ant-design/icons';
 import { useI18n } from '../../i18n';
@@ -9,7 +11,7 @@ export interface EmptyOverlayProps {
   onRetry: () => void;
 }
 
-export function EmptyOverlay({ show, onRetry }: EmptyOverlayProps) {
+export const EmptyOverlay = memo(function EmptyOverlay({ show, onRetry }: EmptyOverlayProps) {
   const { t } = useI18n();
   if (!show) return null;
   return (
@@ -26,4 +28,4 @@ export function EmptyOverlay({ show, onRetry }: EmptyOverlayProps) {
       </Button>
     </div>
   );
-}
+});

@@ -3,7 +3,7 @@ import { message } from 'antd';
 import Toolbar from './components/Toolbar';
 import ChartPanel from './components/ChartPanel';
 import MobileLayout from './mobile/MobileLayout';
-import { useIsMobile } from './hooks/useIsMobile';
+import { useIsMobile } from './hooks';
 import { marketApi } from './api/client';
 import { I18nContext, STRINGS, type Lang, type StringKey } from './i18n';
 import type { Instrument } from './types';
@@ -115,10 +115,8 @@ export default function App() {
 
   // 2026-07-30：撤销 / 回滚 — 通知 ChartPanel 移除最后一个绘图对象
   // canUndo 状态由 useChartCommandBus 通过 'chart:can-undo-changed' 事件上报（见下方 useEffect 订阅）
-  const undoTickRef = useRef(0);
   const [canUndo, setCanUndo] = useState(false);
   const onUndo = useCallback(() => {
-    undoTickRef.current += 1;
     // 通过 CustomEvent 让 ChartPanel 监听 (轻量, 不引入额外 Ref forwarding)
     window.dispatchEvent(new CustomEvent('chart:undo'));
   }, []);
@@ -257,10 +255,13 @@ export default function App() {
   }, [code, instruments]);
 
   // ---- 工具栏回调 ----
-  const onZoomOut = useCallback(() => (window as any).__chartZoom?.zoomOut(), []);
-  const onZoomIn = useCallback(() => (window as any).__chartZoom?.zoomIn(), []);
-  const onShiftLeft = useCallback(() => (window as any).__chartZoom?.shiftLeft(), []);
-  const onShiftRight = useCallback(() => (window as any).__chartZoom?.shiftRight(), []);
+  // 2026-09-10：缩放/平移改走 registerZoom 注册（原 window.__chartZoom 全局变量迁移）
+  const zoomApiRef = useRef<{ zoomOut: () => void; zoomIn: () => void; shiftLeft: () => void; shiftRight: () => void }>({ zoomOut: () => {}, zoomIn: () => {}, shiftLeft: () => {}, shiftRight: () => {} });
+  const registerZoom = useCallback((api: typeof zoomApiRef.current) => { zoomApiRef.current = api; }, []);
+  const onZoomOut = useCallback(() => zoomApiRef.current.zoomOut(), []);
+  const onZoomIn = useCallback(() => zoomApiRef.current.zoomIn(), []);
+  const onShiftLeft = useCallback(() => zoomApiRef.current.shiftLeft(), []);
+  const onShiftRight = useCallback(() => zoomApiRef.current.shiftRight(), []);
   const onExport = useCallback(() => exportRef.current(), []);
   const registerExport = useCallback((fn: () => void) => { exportRef.current = fn; }, []);
   const onRefresh = useCallback(() => refreshRef.current(), []);
@@ -292,10 +293,6 @@ export default function App() {
             onLowerChange={replaceLower}
             onLowerParamsChange={setLowerParams}
             onToolChange={setTool}
-            onZoomOut={onZoomOut}
-            onZoomIn={onZoomIn}
-            onShiftLeft={onShiftLeft}
-            onShiftRight={onShiftRight}
             onReorderLower={reorderLower}
             onRemoveLower={removeLower}
             registerExport={registerExport}
@@ -303,8 +300,6 @@ export default function App() {
             refreshing={refreshing}
             onRefreshingChange={setRefreshing}
             registerRefresh={registerRefresh}
-            onUndo={onUndo}
-            canUndo={canUndo}
             onClearAll={onClearAll}
             canClear={canClear}
           />
@@ -354,6 +349,7 @@ export default function App() {
               onRemoveLower={removeLower}
               registerExport={registerExport}
               registerRefresh={registerRefresh}
+              registerZoom={registerZoom}
               onRefreshingChange={setRefreshing}
               onToolChange={setTool}
               registerDrawingCounts={registerDrawingCounts}

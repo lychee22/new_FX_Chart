@@ -8,7 +8,11 @@
 // 拖动: 鼠标按下后拖动改 anchor (time/price)，失焦或松开提交
 // 删除: 选中态下上层键盘事件通知删除（不处理 Backspace 防止编辑时误删）
 
-import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
+// 2026-09-10：memo 化 — ChartPanel 高频 state（info 十字线读数）变化时
+// 跳过整层重渲染；函数 props 已由 ChartPanel useCallback 稳定。
+// 注意：chart/series props 传的是 ref.current（非响应式），首次渲染时可能为 null，
+// memo 不影响该行为（与之前一致，依赖 ChartPanel 其他 state 变化带动）。
+import { memo, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import type { IChartApi, ISeriesApi, Time } from 'lightweight-charts';
 import '../styles/TextBox.css';
 
@@ -17,6 +21,9 @@ export interface TextBoxData {
   t: Time;
   p: number;
   text: string;
+  // 2026-09-11：逐对象显隐标记 — true 时该框不渲染、不可点选；新创建的框保持
+  // undefined（可见）。与 canvas 画线的 BaseDraw.hidden 语义一致（见 DrawingManager.setVisible）。
+  hidden?: boolean;
 }
 
 /** 2026-08-05：文字框 + 其在 DrawingManager.objects 中的下标（统一以 objects 下标为准）。 */
@@ -24,6 +31,13 @@ export interface TextBoxEntry {
   box: TextBoxData;
   index: number;
 }
+
+/**
+ * 2026-09-10：文字框选中态（ChartPanel 顶层 state）— 合并原 selectedTextBox/editingTextBox
+ * 两 state（所有写入点均成对 set，editing 必然隐含 selected）。
+ * TextBoxLayer 的 selectedIndex/editingIndex props 由该值派生。
+ */
+export type TextBoxSel = { idx: number; editing: boolean } | null;
 
 interface Props {
   chart: IChartApi | null;
@@ -36,13 +50,11 @@ interface Props {
   onCommit: (index: number, text: string) => void;
   onMove: (index: number, time: Time, price: number) => void;
   placeholder: string;
-  /** 2026-09-01：移动端全局显隐开关。false 时整层 display:none（与 canvas 画线同步）。默认 true。 */
-  visible?: boolean;
 }
 
 const DRAG_THRESHOLD = 3; // px
 
-export default function TextBoxLayer(props: Props) {
+const TextBoxLayer = memo(function TextBoxLayer(props: Props) {
   const {
     chart, series, textBoxes,
     selectedIndex, editingIndex,
@@ -159,8 +171,6 @@ export default function TextBoxLayer(props: Props) {
   }, [editingIndex, onCommit]);
 
   if (!chart || !series) return null;
-  // 2026-09-01：移动端全局显隐 — 与 canvas 画线同步切换
-  if (props.visible === false) return null;
 
   return (
     <div
@@ -174,7 +184,9 @@ export default function TextBoxLayer(props: Props) {
     >
       {textBoxes.map(({ box, index }) => {
         const pos = positions.get(index);
-        if (!pos || !pos.visible) return null;
+        // 2026-09-11：逐对象显隐 — 隐藏的框不渲染（新创建的框 hidden 为 undefined，
+        // 照常渲染并可进入编辑），与 canvas 画线的 DrawingRenderer.draw 过滤一致。
+        if (!pos || !pos.visible || box.hidden === true) return null;
         const isSelected = selectedIndex === index;
         const isEditing = editingIndex === index;
         const style: CSSProperties = {
@@ -292,4 +304,6 @@ export default function TextBoxLayer(props: Props) {
       })}
     </div>
   );
-}
+});
+
+export default TextBoxLayer;

@@ -1,3 +1,6 @@
+// 2026-09-10：memo 化 — 十字线高频 setInfo 时避免每个副图标题重渲染；
+// 函数 props (onMove/onRemove/onReset) 已由 ChartPanel useCallback 稳定。
+import { memo } from 'react';
 import { Button } from 'antd';
 import { CaretUpOutlined, DeleteOutlined, RedoOutlined } from '@ant-design/icons';
 import { useI18n } from '../../i18n';
@@ -30,7 +33,7 @@ export interface PaneTitleOverlayProps {
   onReset: (tech: number) => void;
 }
 
-export function PaneTitleOverlay({
+export const PaneTitleOverlay = memo(function PaneTitleOverlay({
   tech,
   idx,
   paneTop,
@@ -95,4 +98,4 @@ export function PaneTitleOverlay({
       )}
     </div>
   );
-}
+});

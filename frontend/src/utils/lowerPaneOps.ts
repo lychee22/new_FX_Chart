@@ -13,12 +13,13 @@
 
 import type { Dispatch, MutableRefObject, SetStateAction } from 'react';
 import type { IChartApi, ISeriesApi, Time } from 'lightweight-charts';
-import type { Bar, IndicatorResult } from '../types';
+import type { Bar, IndicatorResult, NationPalette } from '../types';
 import { LOWER_TECH } from '../types';
 import { formatIndicatorParams } from '../constants/indicatorParams';
 import { sanitizePoints, formatLastValue } from '../utils/formatters';
 import { HistogramSeries, LineSeries } from 'lightweight-charts';
-import type { NationPalette } from '../constants/nation';
+// 2026-09-10：修复预存构建错误 — 原从 constants/nation 导入 NationPalette，但该文件
+// 是无导出的空壳（只有注释），真实定义在 types/index.ts。
 import { indicatorApi } from '../api/client';
 
 /** 共享依赖入参 — 把现在依赖的 ref/state 聚合成 deps 对象 */
@@ -43,7 +44,9 @@ export interface LowerPaneOpsDeps {
   // 工具函数
   fitTimeScaleDefault: () => void;
   syncPaneLayout: () => void;
-  updatePaneTops: () => void;
+  // 2026-09-10：改为可选 — 原实现只写 useLowerPanes 内部的死 state（从未被消费），
+  // 真实浮层定位由 ChartPanel 顶层 ResizeObserver + paneLayouts 负责，hook 侧已删除。
+  updatePaneTops?: () => void;
   refreshLowerValues: () => void;
   // 回调（用于通知父组件）
   onRemoveLower: (tech: number) => void;
@@ -381,7 +384,7 @@ export async function replaceLowerPane(
       syncPaneLayout();
       requestAnimationFrame(fitTimeScaleDefault);
     }
-    updatePaneTops();
+    updatePaneTops?.();
   } catch (e) {
     console.error(`替换副图指标 ${oldTech} → ${newTech} 失败`, e);
     // 失败回滚: 通知父组件取消新指标（旧指标仍显示, 由全量重建兜底收敛状态）
@@ -489,7 +492,7 @@ export function removeLowerPane(
   });
   // 6) 删除后立即重算浮层定位 —— pane 重排后 ResizeObserver 异步触发有窗口期，
   // 主动刷新避免剩余 pane 的浮层位置错乱/丢失
-  updatePaneTops();
+  updatePaneTops?.();
   // 注：liveLower 入参保留以备将来扩展（例如把 liveLower 与 lastLowerRef 做一致性校验），
   // 当前实现中反查失败已通过 onFullReload 兜底，无需进一步校验。
   void liveLower;

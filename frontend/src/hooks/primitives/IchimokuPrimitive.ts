@@ -9,7 +9,7 @@ import type {
   SeriesAttachedParameter,
   Time,
 } from 'lightweight-charts';
-import type { Bar, IndicatorPoint, IndicatorResult, IndicatorSeries } from '../types';
+import type { Bar, IndicatorPoint, IndicatorResult, IndicatorSeries } from '../../types';
 
 const CLOUD_UP = '#C0F0C0';
 const CLOUD_DOWN = '#80A080';

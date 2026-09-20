@@ -41,6 +41,17 @@
 			<artifactId>spring-boot-starter-validation</artifactId>
 		</dependency>
 
+		<!-- 2026-08-06 11:24:29：第一阶段从旧 SQL Server 只读获取 CU 历史 K 线。 -->
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-jdbc</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>com.microsoft.sqlserver</groupId>
+			<artifactId>mssql-jdbc</artifactId>
+			<scope>runtime</scope>
+		</dependency>
+
 		<!-- OpenAPI 3 / Swagger UI (在线文档 + 在线调用) -->
 		<dependency>
 			<groupId>org.springdoc</groupId>
@@ -57,6 +68,8 @@
 	</dependencies>
 
 	<build>
+		<!-- 2026-08-06 11:55:28：固定部署 JAR 名称，避免版本号变化影响启停脚本。 -->
+		<finalName>forex-chart</finalName>
 		<plugins>
 			<plugin>
 				<groupId>org.springframework.boot</groupId>

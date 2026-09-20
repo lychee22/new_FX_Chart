@@ -56,6 +56,9 @@ export const STRINGS = {
     // 2026-07-31：单类工具数量上限提示（除画线外每类最多 5 个）
     LimitReached: 'Reached the limit (max 5). Please clear existing drawings first.',
     RightClickCancel: 'Right-click to finish',
+    // 2026-09-10：工具提示文案（原 ChartPanel 内 `${'points'}` 硬编码英文 / 括号内硬编码中文）
+    Points: 'points',
+    ChannelHint: '(bottom-left → top-left → top-right)',
     CancelDraw: 'Cancel',
     // 字段
     o: 'O', h: 'H', l: 'L', c: 'C', v: 'V', mp: 'MP', mc: 'MC', mpc: 'MP(C)', ar: 'AR',
@@ -131,6 +134,9 @@ export const STRINGS = {
     // 2026-07-31：單類工具數量上限提示 (除畫線外每類最多 5 個)
     LimitReached: '已達上限 (最多 5 個),請先清除已繪內容。',
     RightClickCancel: '按右鍵退出',
+    // 2026-09-10：工具提示文案（原 ChartPanel 內硬編碼）
+    Points: '點',
+    ChannelHint: '(左下 → 左上 → 右上)',
     CancelDraw: '取消',
     o: '開', h: '高', l: '低', c: '收', v: '成', mp: '聚焦點', mc: '聚焦量', mpc: '聚焦點(量)', ar: '活躍區',
     modal_point: '聚焦點', support: '支持', resistance: '阻力', latest_mp: '最新聚焦點', bull: '牛證', bear: '熊證',
@@ -204,6 +210,9 @@ export const STRINGS = {
     // 2026-07-31：单类工具数量上限提示（除画线外每类最多 5 个）
     LimitReached: '已达上限 (最多 5 个),请先清除已绘内容。',
     RightClickCancel: '右键退出',
+    // 2026-09-10：工具提示文案（原 ChartPanel 内硬编码）
+    Points: '点',
+    ChannelHint: '(左下 → 左上 → 右上)',
     CancelDraw: '取消',
     o: '开', h: '高', l: '低', c: '收', v: '成', mp: '聚集点', mc: '聚焦量', mpc: '聚集点(量)', ar: '活跃区',
     modal_point: '聚焦点', support: '支持', resistance: '阻力', latest_mp: '最新聚焦点', bull: '牛证', bear: '熊证',

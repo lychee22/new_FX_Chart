@@ -22,7 +22,7 @@
 import { useEffect } from 'react';
 import type { DrawingManager } from '../drawing/DrawingManager';
 import { TOOL } from '../drawing/tools';
-import { useWindowEvents } from './utils/refs';
+import { useWindowEvents } from '../utils/refs';
 
 export interface UseChartCommandBusDeps {
   drawingMgrRef: React.MutableRefObject<DrawingManager | null>;

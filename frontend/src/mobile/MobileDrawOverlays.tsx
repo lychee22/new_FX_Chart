@@ -6,6 +6,8 @@
 //  步骤提示字符串由调用方传入（来自 useChartDrawInteraction 的 stepHint 状态）。
 //  该字符串已是"已本地化"的中文（移动端仅 sc/tc 提示），en 时降级到画线工具通用提示。
 
+// 2026-09-10：memo 化 — onDeleteSelected 已由 ChartPanel useCallback 稳定。
+import { memo } from 'react';
 import { DeleteOutlined } from '@ant-design/icons';
 import { useI18n } from '../i18n';
 
@@ -18,7 +20,7 @@ interface MobileDrawOverlaysProps {
   onDeleteSelected: () => void;
 }
 
-export function MobileDrawOverlays(props: MobileDrawOverlaysProps) {
+export const MobileDrawOverlays = memo(function MobileDrawOverlays(props: MobileDrawOverlaysProps) {
   const { t } = useI18n();
   const { stepHint, hasSelected, onDeleteSelected } = props;
 
@@ -55,4 +57,4 @@ export function MobileDrawOverlays(props: MobileDrawOverlaysProps) {
       )}
     </>
   );
-}
+});

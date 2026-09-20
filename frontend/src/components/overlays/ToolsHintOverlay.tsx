@@ -1,3 +1,5 @@
+// 2026-09-10：memo 化 — ChartPanel 高频 state（info 等）变化时避免无关重渲染。
+import { memo } from 'react';
 import { useI18n } from '../../i18n';
 
 // 2026-09-08：触屏画线工具提示浮层 — 淡黄色 box + 移动端"取消"按钮。
@@ -13,7 +15,7 @@ export interface ToolsHintOverlayProps {
   hidden?: boolean;
 }
 
-export function ToolsHintOverlay({ hint, mobile, hidden }: ToolsHintOverlayProps) {
+export const ToolsHintOverlay = memo(function ToolsHintOverlay({ hint, mobile, hidden }: ToolsHintOverlayProps) {
   const { t } = useI18n();
   if (hidden) return null;
   return (
@@ -36,4 +38,4 @@ export function ToolsHintOverlay({ hint, mobile, hidden }: ToolsHintOverlayProps
       )}
     </div>
   );
-}
+});

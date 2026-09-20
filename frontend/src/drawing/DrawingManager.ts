@@ -981,6 +981,9 @@ export class DrawingManager implements ISeriesPrimitive<Time> {
     } else {
       for (const obj of this.objects) obj.hidden = false;
     }
+    // 2026-09-11：hidden 标记翻转后通知文字框监听器 — TextBoxLayer 现按 box.hidden
+    // 逐对象过滤（不再整层卸载），需要新的 textBoxes 数组引用触发 memo 层重渲染。
+    this.notifyTextBoxesChanged();
     this.redraw();
   }
 
@@ -1340,6 +1343,9 @@ export class DrawingManager implements ISeriesPrimitive<Time> {
     for (let i = this.objects.length - 1; i >= 0; i--) {
       const o = this.objects[i];
       if (o.type !== TOOL.TEXTBOX) continue;
+      // 2026-09-11：与 hitTestObject 一致 — 隐藏的文字框不可被点选（否则会弹出
+      // 不可见的选中框与删除 FAB）。
+      if (o.hidden) continue;
       const x = ts.timeToCoordinate(o.t);
       const y = this.series.priceToCoordinate(o.p);
       if (x === null || y === null) continue;

@@ -18,7 +18,7 @@ import type {
   Coordinate,
   Time,
 } from 'lightweight-charts';
-import type { Bar } from '../types';
+import type { Bar } from '../../types';
 
 // Prosticks 颜色常量 (对齐旧系统)
 const MP_COLOR = '#FF0000';        // 模态点

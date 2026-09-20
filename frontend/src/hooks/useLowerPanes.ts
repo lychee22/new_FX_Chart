@@ -6,13 +6,14 @@
 //   - 4 个 React state：lowerLoadingStates / lowerErrorStates / lowerValues / pendingFadingOut
 //   - [lower] effect（消费 tapSwitch flag → 重算 wsIndicatorsDisabled → diff added/removed → 单删单增走 replace / 精细 remove + 串行 add）
 //   - [upperParams/lowerParams] effect（params 变化时 resetLowerPane + loadOverlayIndicator）
-//   - 暴露 refreshLowerValues / updatePaneTops / removeLowerPaneImmediate / resetLowerPaneImmediate / moveLower / hide/restore 函数
+//   - 暴露 refreshLowerValues / removeLowerPaneImmediate / resetLowerPaneImmediate / moveLower / hide/restore 函数
 //
 // 5 个核心操作函数抽到 utils/lowerPaneOps.ts（buildPaneSeries / loadLowerIndicators / addLowerPane / replaceLowerPane / removeLowerPane / resetLowerPane）
 
 import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type MutableRefObject, type SetStateAction } from 'react';
 import type { IChartApi, ISeriesApi } from 'lightweight-charts';
 import type { Bar, IndicatorResult, NationPalette } from '../types';
+import { UPPER_TECH } from '../types';
 import { formatLastValue } from '../utils/formatters';
 import { isDefaultParams } from '../constants/indicatorParams';
 import {
@@ -46,8 +47,6 @@ export interface UseLowerPanesDeps {
   upperParams?: number[];
   upper: number;
   decimals: number;
-  // 跨 hook 函数
-  refreshAllRef: MutableRefObject<(() => void) | null>;
   // 回调
   onRemoveLower: (tech: number) => void;
   panesHiddenForFullscreenRef: MutableRefObject<boolean>;
@@ -59,7 +58,6 @@ export interface UseLowerPanesApi {
   lowerValues: Map<number, string>;
   pendingFadingOut: Set<number>;
   refreshLowerValues: () => void;
-  updatePaneTops: () => void;
   // 暴露给父级调用（如移动端删除按钮的 handleRemoveLower）
   removeLowerPaneImmediate: (tech: number) => void;
   resetLowerPaneImmediate: (tech: number) => void;
@@ -77,7 +75,7 @@ export function useLowerPanes(deps: UseLowerPanesDeps): UseLowerPanesApi {
     fitTimeScaleDefault, syncPaneLayout,
     wsIndicatorsDisabledRef, suppressUpperRef, loadOverlayIndicator,
     palette, lower, code, interval, lowerParams, upperParams, upper,
-    decimals, refreshAllRef, onRemoveLower, panesHiddenForFullscreenRef,
+    decimals, onRemoveLower, panesHiddenForFullscreenRef,
   } = deps;
 
   // ---- 4 个 ref ----
@@ -124,7 +122,6 @@ export function useLowerPanes(deps: UseLowerPanesDeps): UseLowerPanesApi {
       setLowerLoadingStates, setLowerErrorStates, setLowerValues, setPendingFadingOut,
       decimals,
       fitTimeScaleDefault, syncPaneLayout,
-      updatePaneTops: () => updatePaneTops(),
       refreshLowerValues,
       onRemoveLower,
       // 反查失败兜底：触发全量重建
@@ -186,49 +183,11 @@ export function useLowerPanes(deps: UseLowerPanesDeps): UseLowerPanesApi {
     }
   }, [buildOpsDeps, lower, chartRef, syncPaneLayout, refreshLowerValues]);
 
-  // 2026-07-29：同步每个 pane 相对 chart-container 顶部的像素偏移，用于副图标题浮层定位
-  // 2026-07-30：提取为可复用函数 —— 精细删除后立即调用，避免浮层在 pane 重排后位置错乱/丢失
-  const updatePaneTops = useCallback(() => {
-    const chart = chartRef.current;
-    const container = (chartRef as any).containerRef?.current ?? null;
-    // 注：原代码用 containerRef.current，但本 hook 未直接持有 containerRef。
-    // 调用方（ChartPanel）应通过外层 ref 读取，这里通过 chart.panes() 几何计算 top
-    if (!chart) return;
-    const panes = chart.panes();
-    // 没有 container 时，回退：仅基于 pane 几何 top 累加（绝对值）
-    // 但 updatePaneTops 必须有 container 才能计算 top；这里返回相对 chart 容器原点的 top
-    const containerEl = (chart as any)._container ?? null;
-    const containerRect = containerEl ? containerEl.getBoundingClientRect() : null;
-    const tops = panes.map((p) => {
-      const el = p.getHTMLElement();
-      if (!el) return 0;
-      const r = el.getBoundingClientRect();
-      return containerRect ? r.top - containerRect.top : r.top;
-    });
-    setPaneTopsState(tops);
-    // 同步记录每个 pane 的 top+height
-    setPaneRectsState(
-      panes.map((p) => {
-        const el = p.getHTMLElement();
-        const r = el ? el.getBoundingClientRect() : null;
-        const top = containerRect && r ? r.top - containerRect.top : r ? r.top : 0;
-        return r ? { top, height: r.height } : { top: 0, height: 0 };
-      }),
-    );
-    void container;
-  }, [chartRef]);
-
-  // 暴露给外部浮层使用的 state（在 hook 内部通过 setPaneTopsState 同步）
-  const [paneTops, setPaneTopsState] = useState<number[]>([]);
-  const [paneRects, setPaneRectsState] = useState<Array<{ top: number; height: number }>>([]);
-
-  // 注：paneTops 与 paneRects 是 useChartDrawInteraction / PaneTitleOverlay 所需状态。
-  // 实际 ChartPanel 中这两个 state 是 ChartPanel 顶层 useState；为保持 hook 自治，这里
-  // 在 hook 内部独立维护一份，并通过 updatePaneTops 同步。ChartPanel 可改为消费本 hook 的
-  // 返回值。但为最小化对 ChartPanel 的改动（避免"顺手重构"），ChartPanel 仍维护自己的 state，
-  // 这里暴露 updatePaneTops 函数让其调用。
-  void paneTops;
-  void paneRects;
+  // 2026-07-29 原此处有 updatePaneTops（同步 pane 浮层定位）— 2026-09-10 移除：
+  // 它只写本 hook 内部的 paneTops/paneRects state，从未被任何组件消费（死写入，
+  // 还每次触发无意义 re-render），且内部依赖 (chart as any)._container 私有属性。
+  // 真实浮层定位由 ChartPanel 顶层的 paneLayouts + ResizeObserver 路径负责。
+  // lowerPaneOps 的 updatePaneTops 入参已改为可选（no-op），不再传入。
 
   // 2026-07-29：副图指标切换 (多选) ----
   // 2026-08-04：拆成两个 effect：
@@ -258,7 +217,7 @@ export function useLowerPanes(deps: UseLowerPanesDeps): UseLowerPanesApi {
     // 2026-08-05：触屏切换时本帧 WS 重订阅会触发后端重推全量 INDICATORS（含 upper）—
     // 在本 effect 执行时（WS 重订阅 effect 之前）同步武装一次性抑制标志，消除上一轮
     // "calculate 完成后才武装"的竞态（WS 推送先到导致抑制落空、叠加指标被历史首点拉回重绘）。
-    if (isTapSwitch && upper !== 0 /* UPPER_TECH.NONE */) {
+    if (isTapSwitch && upper !== UPPER_TECH.NONE) {
       suppressUpperRef.current = true;
     }
 
@@ -347,7 +306,7 @@ export function useLowerPanes(deps: UseLowerPanesDeps): UseLowerPanesApi {
     // 触屏切换必须跳过 (主图指标/缩放不受影响)；设置面板入口无标志，保持原行为。
     // 标志由 [lower] effect 统一消费，这里只读不删。
     if ((window as any).__mobileLowerTap !== undefined) return;
-    if (upper !== 0 /* UPPER_TECH.NONE */) {
+    if (upper !== UPPER_TECH.NONE) {
       void loadOverlayIndicator(upper, code, interval, upperParams);
     }
     lower.forEach((tech) => {
@@ -395,9 +354,8 @@ export function useLowerPanes(deps: UseLowerPanesDeps): UseLowerPanesApi {
     }
 
     // 3) 同步 React state (让浮层按钮顺序跟着变，但不触发 reload)
-    // onReorderLower 由 ChartPanel 注入到 onReorderLower 路径
-    // 这里直接 dispatch chart 事件，让上层 App 同步 lower 数组
-    window.dispatchEvent(new CustomEvent('chart:reorder-lower', { detail: { tech, dir } }));
+    // 上层 App 的 lower 数组同步由 ChartPanel.handleMoveLower 调 props.onReorderLower
+    // 完成 (2026-09-10 删除 chart:reorder-lower 事件派发 — 全仓库无监听者的死代码)。
   }, [chartRef, lower]);
 
   // ---- 2026-08-05：横屏全屏真正隐藏副图 ----
@@ -437,7 +395,6 @@ export function useLowerPanes(deps: UseLowerPanesDeps): UseLowerPanesApi {
     setPendingFadingOut(new Set());
     // 4) 只剩主图自动占满, 同步浮层定位
     syncPaneLayout();
-    updatePaneTops();
   }, [chartRef, paneSeriesMapRef, syncPaneLayout, setLowerValues, setLowerLoadingStates, setPendingFadingOut, panesHiddenForFullscreenRef]);
 
   /** 退出全屏时从缓存恢复副图 — 按 props.lower 顺序重建 pane:
@@ -512,11 +469,10 @@ export function useLowerPanes(deps: UseLowerPanesDeps): UseLowerPanesApi {
     }
     refreshLowerValues();
     syncPaneLayout();
-    updatePaneTops();
   }, [chartRef, paneSeriesMapRef, panesHiddenForFullscreenRef, lower,
       lowerResultsRef, fullscreenRef, palette, code, interval,
       setLowerErrorStates, setLowerLoadingStates,
-      refreshLowerValues, syncPaneLayout, updatePaneTops, buildOpsDeps]);
+      refreshLowerValues, syncPaneLayout, buildOpsDeps]);
 
   const loadLowerIndicatorsFull = useCallback(async (cd: string, iv: number) => {
     await loadLowerIndicatorsFullImpl(cd, iv);
@@ -528,7 +484,6 @@ export function useLowerPanes(deps: UseLowerPanesDeps): UseLowerPanesApi {
     lowerValues,
     pendingFadingOut,
     refreshLowerValues,
-    updatePaneTops,
     removeLowerPaneImmediate,
     resetLowerPaneImmediate,
     moveLower,
@@ -537,7 +492,7 @@ export function useLowerPanes(deps: UseLowerPanesDeps): UseLowerPanesApi {
     loadLowerIndicatorsFull,
   }), [
     lowerLoadingStates, lowerErrorStates, lowerValues, pendingFadingOut,
-    refreshLowerValues, updatePaneTops, removeLowerPaneImmediate, resetLowerPaneImmediate,
+    refreshLowerValues, removeLowerPaneImmediate, resetLowerPaneImmediate,
     moveLower, hideLowerPanesForFullscreen, restoreLowerPanesFromCache, loadLowerIndicatorsFull,
   ]);
 }

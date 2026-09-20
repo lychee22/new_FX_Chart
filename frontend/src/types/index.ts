@@ -148,13 +148,19 @@ export interface ChartPanelProps {
   registerExport: (fn: () => void) => void;
   /** 2026-08-05：注册"手动刷新/断线重连重拉"入口 — 工具栏刷新按钮与 WS 重连回调共用 */
   registerRefresh?: (fn: () => void) => void;
+  /** 2026-09-10：注册缩放/平移命令入口（原 window.__chartZoom 全局变量迁移为注册模式,
+   *  与 registerExport/registerRefresh 同风格）。App 侧存 ref, 工具栏缩放按钮调用。 */
+  registerZoom?: (api: {
+    zoomOut: () => void; zoomIn: () => void;
+    shiftLeft: () => void; shiftRight: () => void;
+  }) => void;
   /** 2026-07-31：文字框创建后/右键退出时重置绘图工具 */
   onToolChange: (tool: number) => void;
   // 2026-09-07：每类工具对象数量变化时上报 (key=TOOL.*, value=count),
   // 移动端工具按钮需要据此判断点击时是否已达上限。
   registerDrawingCounts?: (counts: Record<number, number>) => void;
-  // 2026-09-09：以下 prop 已迁移走 window.CustomEvent / 命令总线 / window.__chartZoom，ChartPanel 不再需要：
-  //   onZoomOut / onZoomIn / onShiftLeft / onShiftRight — 由 App 通过 (window as any).__chartZoom 触发
+  // 2026-09-10：以下 prop 已迁移走 window.CustomEvent / 命令总线 / registerZoom，ChartPanel 不再需要：
+  //   onZoomOut / onZoomIn / onShiftLeft / onShiftRight — 由 App 通过 registerZoom 注册的 api 触发
   //   onUndo / canUndo / registerCanUndo — 由 useChartCommandBus 监听 'chart:undo' CustomEvent
   //   onClearAll / registerCanClear — 由 useChartCommandBus 监听 'chart:clear-all' CustomEvent
   // 见 hooks/useChartCommandBus.ts。
@@ -200,10 +206,9 @@ export interface MobileLayoutProps {
   /** 2026-08-04：副图指标参数变化 (设置面板套用) */
   onLowerParamsChange: (p: number[]) => void;
   onToolChange: (v: number) => void;
-  onZoomOut: () => void;
-  onZoomIn: () => void;
-  onShiftLeft: () => void;
-  onShiftRight: () => void;
+  // 2026-09-10：移除死 props onZoomOut/onZoomIn/onShiftLeft/onShiftRight — MobileLayout
+  // 从未消费（缩放/平移走 registerZoom 注册），onUndo/canUndo — 对应按钮已注释停用。
+  // onClearAll/canClear 保留 — MobileDrawingDrawer 的"删除全部"仍在使用。
   /** 2026-07-29：副图上下移动 (桌面端浮层用, 移动端保留接口占位) */
   onReorderLower: (tech: number, dir: -1 | 1) => void;
   /** 2026-07-29：删除指定副图 */
@@ -217,10 +222,6 @@ export interface MobileLayoutProps {
   onRefreshingChange?: (refreshing: boolean) => void;
   /** 2026-08-05：注册 ChartPanel 的 refreshAllData (刷新按钮与 WS 重连重拉共用) */
   registerRefresh: (fn: () => void) => void;
-  /** 2026-07-30：撤销最后一个绘图 */
-  onUndo: () => void;
-  /** 2026-07-30：是否有可撤销对象 — 由 App 通过 'chart:can-undo-changed' 事件驱动 */
-  canUndo: boolean;
   /** 2026-07-31：清除所有已绘制对象 */
   onClearAll: () => void;
   /** 2026-07-31：是否有可清除对象 */

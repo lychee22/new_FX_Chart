@@ -7,7 +7,7 @@
 //   - [chartType] effect 中的 IKH 分支（IKH 需随 chartType 重建 primitive）
 //   - [upperParams] effect 由 useLowerPanes 协调触发（loadOverlayIndicator 调用）
 
-import { useEffect, useRef, type MutableRefObject } from 'react';
+import { useCallback, useEffect, useRef, type MutableRefObject } from 'react';
 import {
   LineSeries,
   type IChartApi,
@@ -18,7 +18,7 @@ import { message } from 'antd';
 import { indicatorApi } from '../api/client';
 import { formatIndicatorParams } from '../constants/indicatorParams';
 import { sanitizePoints } from '../utils/formatters';
-import { IchimokuPrimitive } from '../primitives/IchimokuPrimitive';
+import { IchimokuPrimitive } from './primitives/IchimokuPrimitive';
 import { NationPalette, UPPER_TECH } from '../types';
 import { useI18n } from '../i18n';
 
@@ -57,7 +57,11 @@ export function useOverlayIndicator(deps: UseOverlayIndicatorDeps): UseOverlayIn
   const { t } = useI18n();
   const overlayRequestRef = useRef(0);
 
-  const loadOverlayIndicator = async (
+  // 2026-09-10：useCallback 稳定化 — 此前裸声明每次 render 新引用, 传染给
+  // useLowerPanes (buildOpsDeps/params effect) 与 ChartPanel 的 loadMainData 依赖链。
+  // 入参显式传 upper/code/interval/params (调用方负责给最新值), 函数体其余走 refs,
+  // 依赖仅需 fitTimeScaleDefault 与 t (错误提示文案)。
+  const loadOverlayIndicator = useCallback(async (
     upperParam: number,
     codeParam: string,
     intervalParam: number,
@@ -110,7 +114,8 @@ export function useOverlayIndicator(deps: UseOverlayIndicatorDeps): UseOverlayIn
     }
     // 注：fullscreenRef 在此 hook 内未直接使用，但保留入参以备未来扩展
     void fullscreenRef;
-  };
+  }, [chartRef, mainSeriesRef, ichimokuPrimRef, overlaySeriesRef, barsRef,
+      fitTimeScaleDefault, t]);
 
   // ---- 叠加指标切换 ----
   useEffect(() => {
